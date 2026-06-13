@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Realtime Telegram source using a user session via Telethon."""
+
+from __future__ import annotations
 
 import asyncio
 import getpass
@@ -291,7 +291,4 @@ class RealtimeTelegramChannelClient:
 
     @staticmethod
     def has_nonspace(text: str) -> bool:
-        for char in text:
-            if not char.isspace():
-                return True
-        return False
+        return any(not char.isspace() for char in text)

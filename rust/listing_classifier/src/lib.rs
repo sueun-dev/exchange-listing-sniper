@@ -16,17 +16,10 @@ const UPBIT_EXCLUDE_KEYWORDS: [&str; 8] = [
     "종료",
     "변경 안내",
 ];
-const BITHUMB_EXCLUDE_KEYWORDS: [&str; 5] = [
-    "입출금",
-    "유의촉구",
-    "거래유의",
-    "시세알림",
-    "종료",
-];
+const BITHUMB_EXCLUDE_KEYWORDS: [&str; 5] = ["입출금", "유의촉구", "거래유의", "시세알림", "종료"];
 
 fn has_bithumb_listing_prefix(title: &str) -> bool {
-    title.starts_with("[마켓 추가]")
-        || title.starts_with("[마켓 추가/수수료 이벤트]")
+    title.starts_with("[마켓 추가]") || title.starts_with("[마켓 추가/수수료 이벤트]")
 }
 
 #[repr(C)]
@@ -44,9 +37,7 @@ fn contains_none(title: &str, keywords: &[&str]) -> bool {
 
 fn is_allowed_bithumb_market_add_suffix(suffix: &str) -> bool {
     let trimmed = suffix.trim();
-    if trimmed.is_empty()
-        || trimmed == "및 재단 에어드랍 안내"
-        || trimmed == "및 에어드랍 안내"
+    if trimmed.is_empty() || trimmed == "및 재단 에어드랍 안내" || trimmed == "및 에어드랍 안내"
     {
         return true;
     }
@@ -81,7 +72,8 @@ fn has_ascii_word(title: &str, needle: &str) -> bool {
         if &bytes[i..i + needle_bytes.len()] == needle_bytes {
             let left_ok = i == 0 || !is_ascii_word_char(bytes[i - 1] as char);
             let right_idx = i + needle_bytes.len();
-            let right_ok = right_idx >= bytes.len() || !is_ascii_word_char(bytes[right_idx] as char);
+            let right_ok =
+                right_idx >= bytes.len() || !is_ascii_word_char(bytes[right_idx] as char);
             if left_ok && right_ok {
                 return true;
             }
@@ -223,6 +215,13 @@ fn copy_to_buffer(value: &str, output: &mut [c_char]) {
     }
 }
 
+/// Classify an exchange announcement title into a native listing result.
+///
+/// # Safety
+/// `exchange` and `title` must be valid, NUL-terminated C strings (or null),
+/// and `out` must be either null or a valid, writable pointer to a
+/// `NativeListingResult`. Passing dangling or misaligned pointers is undefined
+/// behavior. Null pointers are handled gracefully and return `-1`.
 #[no_mangle]
 pub unsafe extern "C" fn classify_listing_title(
     exchange: *const c_char,
@@ -270,9 +269,7 @@ pub unsafe extern "C" fn classify_listing_title(
                 && title
                     .find("원화 마켓 추가")
                     .map(|idx| {
-                        is_allowed_bithumb_market_add_suffix(
-                            &title[idx + "원화 마켓 추가".len()..],
-                        )
+                        is_allowed_bithumb_market_add_suffix(&title[idx + "원화 마켓 추가".len()..])
                     })
                     .unwrap_or(false),
             "market_add",

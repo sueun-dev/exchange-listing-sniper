@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Bridge to the latency-critical C++ Bybit fast path process."""
+
+from __future__ import annotations
 
 import json
 import logging
@@ -114,7 +114,7 @@ class CppFastBuyerBridge:
             self._ensure_process()
             response = self._request_locked(
                 _encode_frame(
-                    f"BUY\t{symbol}\t{quote_amount_text}\t{order_link_id}".encode("utf-8")
+                    f"BUY\t{symbol}\t{quote_amount_text}\t{order_link_id}".encode()
                 )
             )
         payload = self._parse_buy_response(response)

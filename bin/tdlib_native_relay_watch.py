@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Run the minimal TDLib C++ native-buy relay without main.py/poller."""
+
+from __future__ import annotations
 
 import argparse
 import asyncio

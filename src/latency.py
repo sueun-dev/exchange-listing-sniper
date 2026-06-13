@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Lightweight latency tracing for the listing sniper hot path."""
+
+from __future__ import annotations
 
 import time
 

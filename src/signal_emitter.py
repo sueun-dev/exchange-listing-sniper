@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Emit and persist listing signals."""
+
+from __future__ import annotations
 
 import json
 from datetime import datetime, timezone

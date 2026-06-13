@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Check the Telethon/Pyrogram race fallback C++ buy path before live watch."""
+
+from __future__ import annotations
 
 import argparse
 import json

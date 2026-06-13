@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """State file for latest seen Telegram post ids."""
+
+from __future__ import annotations
 
 import json
 import os
@@ -29,10 +29,10 @@ class StateStore:
         if not self.state_file.exists():
             return {}
         try:
-            with open(self.state_file, "r") as handle:
+            with open(self.state_file) as handle:
                 payload = json.load(handle)
                 return payload if isinstance(payload, dict) else {}
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             return {}
 
     def _save(self):

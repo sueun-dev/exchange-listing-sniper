@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Benchmark C++ ultra-engine classify -> order-create preflight."""
+
+from __future__ import annotations
 
 import argparse
 import os

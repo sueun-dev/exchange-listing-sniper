@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Fail fast when local clock skew can make Bybit signed orders invalid."""
+
+from __future__ import annotations
 
 import argparse
 import json

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Fail fast when live trading config cannot actually place a Bybit spot buy."""
+
+from __future__ import annotations
 
 import argparse
 import json

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Listing announcement filters for exchange Telegram posts."""
+
+from __future__ import annotations
 
 from collections.abc import Callable
 
@@ -404,12 +404,10 @@ def classify_listing_title_python(
     if not is_listing:
         return None
 
-    if exchange == "upbit":
-        if not _has_upbit_krw_market(title):
-            return None
-    elif exchange == "bithumb":
-        if not _has_bithumb_won_market(title):
-            return None
+    if exchange == "upbit" and not _has_upbit_krw_market(title):
+        return None
+    if exchange == "bithumb" and not _has_bithumb_won_market(title):
+        return None
 
     ticker, asset_name, markets = _parse_listing_title_fields(title)
     if not ticker:

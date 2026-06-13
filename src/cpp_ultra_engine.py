@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Bridge to the native C++ ultra engine for dedup/classify/buy."""
+
+from __future__ import annotations
 
 import ctypes
 import logging

@@ -1,6 +1,4 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 02. Exchange Listing Sniper - 메인 엔트리포인트.
 
@@ -13,6 +11,8 @@ from __future__ import annotations
   python main.py --realtime
   python main.py --login-source-telegram
 """
+
+from __future__ import annotations
 
 import argparse
 import asyncio
@@ -129,7 +129,7 @@ def _create_notifier(disabled: bool):
 class AsyncSignalNotifier:
     """Offload Telegram sends so the hot path can return immediately."""
 
-    def __init__(self, notifier: "ExchangeListingTelegramNotifier | None"):
+    def __init__(self, notifier: ExchangeListingTelegramNotifier | None):
         self.notifier = notifier
         self._executor = (
             ThreadPoolExecutor(max_workers=1, thread_name_prefix="listing-telegram")

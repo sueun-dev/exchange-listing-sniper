@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Realtime Telegram source using Pyrogram + TgCrypto for lowest-latency MTProto."""
+
+from __future__ import annotations
 
 import asyncio
 import logging

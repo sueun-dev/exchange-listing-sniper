@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Benchmark Python, C++, and Rust listing-title classifiers."""
+
+from __future__ import annotations
 
 import argparse
 import json

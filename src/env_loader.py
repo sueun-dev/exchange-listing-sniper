@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Shared .env loader for module-local runtime settings."""
+
+from __future__ import annotations
 
 import os
 from pathlib import Path

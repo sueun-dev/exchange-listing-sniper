@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Check or refresh the TDLib native Bybit spot-symbol cache."""
+
+from __future__ import annotations
 
 import argparse
 import json
 import os
-import sys
 import time
 import urllib.parse
 from pathlib import Path

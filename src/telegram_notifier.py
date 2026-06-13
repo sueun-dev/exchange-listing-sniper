@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Telegram sender for listing signals."""
+
+from __future__ import annotations
 
 import json
 import logging

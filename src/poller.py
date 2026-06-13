@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Main poller for exchange listing announcements."""
+
+from __future__ import annotations
 
 import json
 import logging
@@ -108,13 +108,13 @@ def _get_state_store_class():
 
 class _ChannelRuntime:
     __slots__ = (
-        "channel_id",
         "channel_handle",
-        "exchange",
-        "display_name",
-        "order_link_prefix",
+        "channel_id",
         "classify_title",
         "classify_title_fast",
+        "display_name",
+        "exchange",
+        "order_link_prefix",
     )
 
     def __init__(
@@ -144,13 +144,13 @@ class ExchangeListingPoller:
         self,
         config_file: Path | str = CONFIG_FILE,
         poll_interval: int = 15,
-        channel_client: "TelegramChannelClientType | None" = None,
-        bybit_client: "BybitClientType | None" = None,
-        spot_buyer: "BybitSpotBuyerType | None" = None,
-        state_store: "StateStoreType | None" = None,
-        signal_emitter: "SignalEmitterType | None" = None,
-        source_emitter: "SourceEventEmitterType | None" = None,
-        cpp_ultra_engine: "CppUltraListingEngineBridgeType | None" = None,
+        channel_client: TelegramChannelClientType | None = None,
+        bybit_client: BybitClientType | None = None,
+        spot_buyer: BybitSpotBuyerType | None = None,
+        state_store: StateStoreType | None = None,
+        signal_emitter: SignalEmitterType | None = None,
+        source_emitter: SourceEventEmitterType | None = None,
+        cpp_ultra_engine: CppUltraListingEngineBridgeType | None = None,
         enable_trading: bool = True,
         defer_persistence: bool = False,
         prefer_cached_lookup: bool = False,
@@ -303,7 +303,7 @@ class ExchangeListingPoller:
         self._process_post_impl = self._select_process_post_impl()
 
     def _load_config(self, config_file: Path | str) -> dict:
-        with open(config_file, "r") as handle:
+        with open(config_file) as handle:
             return json.load(handle)
 
     def _ensure_bybit_client(self):
@@ -1639,12 +1639,8 @@ class ExchangeListingPoller:
     def reset_state(self):
         self.state_store.clear()
         if self.hot_state_enabled:
-            self._hot_start_last_seen = {
-                channel_id: 0 for channel_id in self._channels_by_id
-            }
-            self._hot_last_seen = {
-                channel_id: 0 for channel_id in self._channels_by_id
-            }
+            self._hot_start_last_seen = dict.fromkeys(self._channels_by_id, 0)
+            self._hot_last_seen = dict.fromkeys(self._channels_by_id, 0)
             self._hot_seen_message_ids = {
                 channel_id: OrderedDict()
                 for channel_id in self._channels_by_id

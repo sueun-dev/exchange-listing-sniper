@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Run the fastest TDLib native-buy readiness checks as one JSON gate."""
+
+from __future__ import annotations
 
 import argparse
 import json

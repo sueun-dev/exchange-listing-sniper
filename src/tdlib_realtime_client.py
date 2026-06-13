@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Realtime Telegram source using TDLib via a lightweight relay process."""
+
+from __future__ import annotations
 
 import asyncio
 import json

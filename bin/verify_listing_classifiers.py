@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Verify listing classifiers against the shared golden title fixture."""
+
+from __future__ import annotations
 
 import argparse
 import json

@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Native listing classifier backends and winner selection."""
+
+from __future__ import annotations
 
 import ctypes
 import json

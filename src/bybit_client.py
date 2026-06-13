@@ -1,8 +1,7 @@
-from __future__ import annotations
-
 """Bybit instrument availability lookup."""
 
-import json
+from __future__ import annotations
+
 import logging
 import time
 import urllib.parse

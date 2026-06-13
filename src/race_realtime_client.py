@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Race Telethon, TDLib, and Pyrogram; accept the first arrival for each Telegram post."""
+
+from __future__ import annotations
 
 import asyncio
 import logging

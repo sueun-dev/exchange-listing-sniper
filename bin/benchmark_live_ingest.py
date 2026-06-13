@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """Bounded live Telegram ingest smoke benchmark."""
+
+from __future__ import annotations
 
 import argparse
 import asyncio

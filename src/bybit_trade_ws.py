@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Persistent Bybit trade WebSocket order-entry client."""
+
+from __future__ import annotations
 
 import hashlib
 import hmac
@@ -9,7 +9,6 @@ import logging
 import socket
 import threading
 import time
-from pathlib import Path
 
 from .env_loader import load_env_settings
 
@@ -309,7 +308,7 @@ class BybitTradeWebSocketExecutor:
         expires = int((self._time_fn() + 1.0) * 1000)
         signature = hmac.new(
             self.api_secret.encode("utf-8"),
-            f"GET/realtime{expires}".encode("utf-8"),
+            f"GET/realtime{expires}".encode(),
             hashlib.sha256,
         ).hexdigest()
         payload = {

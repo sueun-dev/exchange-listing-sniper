@@ -619,9 +619,7 @@ class BybitSpotBuyer:
             return False
         if reason in {"spot_symbol_unavailable", "missing_api_config", "quote_amount_invalid"}:
             return False
-        if self._ret_code(result) != -1:
-            return False
-        return True
+        return self._ret_code(result) == -1
 
     # Maps every documented BYBIT_ORDER_TRANSPORT_PREFERENCE token to one of the
     # internal transports. Accepts both the short names ("cpp", "cpp_ws", "ws")

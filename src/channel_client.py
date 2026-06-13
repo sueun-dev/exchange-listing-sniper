@@ -1,6 +1,6 @@
-from __future__ import annotations
-
 """Public Telegram channel HTML fetcher."""
+
+from __future__ import annotations
 
 import html
 import logging
