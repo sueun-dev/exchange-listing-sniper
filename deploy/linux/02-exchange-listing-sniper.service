@@ -1,0 +1,20 @@
+[Unit]
+Description=ChainPulse 02 Exchange Listing Sniper (Low Latency Realtime)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/chainpulse/detection/02-exchange-listing-sniper
+Environment=PYTHONUNBUFFERED=1
+Environment=KEEP_WARM_INTERVAL=30
+ExecStart=/opt/chainpulse/detection/02-exchange-listing-sniper/bin/run_low_latency_realtime.sh
+Restart=always
+RestartSec=2
+TimeoutStopSec=15
+KillSignal=SIGINT
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,225 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+"""Verify listing classifiers against the shared golden title fixture."""
+
+import argparse
+import json
+import logging
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+MODULE_DIR = Path(__file__).resolve().parents[1]
+CASES_PATH = MODULE_DIR / "tests" / "fixtures" / "listing_title_cases.json"
+DEFAULT_RELAY_PATH = MODULE_DIR / "bin" / "tdlib_json_relay"
+
+sys.path.insert(0, str(MODULE_DIR))
+
+from src.announcement_filter import (  # noqa: E402
+    classify_listing_title_python,
+    make_listing_title_classifier,
+)
+
+logging.getLogger("src.native_classifier").setLevel(logging.ERROR)
+
+
+def _case_id(case: dict[str, Any]) -> str:
+    return str(case["id"])
+
+
+def _expected_subset(expected: dict[str, Any] | None) -> dict[str, Any] | None:
+    if expected is None:
+        return None
+    return {
+        "signal_type": expected["signal_type"],
+        "ticker": expected["ticker"],
+        "tickers": expected["tickers"],
+        "asset_name": expected["asset_name"],
+        "markets": expected["markets"],
+    }
+
+
+def _actual_subset(actual: dict[str, Any] | None) -> dict[str, Any] | None:
+    if actual is None:
+        return None
+    return {
+        "signal_type": actual.get("signal_type"),
+        "ticker": actual.get("ticker"),
+        "tickers": actual.get("tickers"),
+        "asset_name": actual.get("asset_name"),
+        "markets": actual.get("markets"),
+    }
+
+
+def _record_mismatch(
+    failures: list[dict[str, Any]],
+    *,
+    classifier: str,
+    case: dict[str, Any],
+    actual: dict[str, Any] | None,
+):
+    failures.append(
+        {
+            "classifier": classifier,
+            "case_id": _case_id(case),
+            "title": case["title"],
+            "expected": _expected_subset(case["expected"]),
+            "actual": _actual_subset(actual),
+        }
+    )
+
+
+def _verify_python(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    failures: list[dict[str, Any]] = []
+    for case in cases:
+        actual = classify_listing_title_python(
+            exchange=case["exchange"],
+            title=case["title"],
+            display_name=case["exchange"],
+        )
+        if _actual_subset(actual) != _expected_subset(case["expected"]):
+            _record_mismatch(
+                failures,
+                classifier="python",
+                case=case,
+                actual=actual,
+            )
+    return {"name": "python_classifier_fixture", "ok": not failures, "failures": failures}
+
+
+def _verify_default(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    failures: list[dict[str, Any]] = []
+    classifiers: dict[str, Any] = {}
+    for case in cases:
+        exchange = str(case["exchange"])
+        if exchange not in classifiers:
+            classifiers[exchange] = make_listing_title_classifier(
+                exchange=exchange,
+                display_name=exchange,
+            )
+        actual = classifiers[exchange](case["title"])
+        if _actual_subset(actual) != _expected_subset(case["expected"]):
+            _record_mismatch(
+                failures,
+                classifier="default",
+                case=case,
+                actual=actual,
+            )
+    return {"name": "default_classifier_fixture", "ok": not failures, "failures": failures}
+
+
+def _relay_actual(
+    *,
+    relay_path: Path,
+    exchange: str,
+    title: str,
+    timeout: float,
+) -> dict[str, Any] | None:
+    completed = subprocess.run(
+        [str(relay_path), "--classify-title", exchange, title],
+        cwd=str(MODULE_DIR),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=timeout,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return {
+            "signal_type": None,
+            "ticker": None,
+            "tickers": None,
+            "asset_name": None,
+            "markets": None,
+            "error": completed.stdout.strip(),
+            "returncode": completed.returncode,
+        }
+    payload = json.loads(completed.stdout)
+    if payload == {"matched": False}:
+        return None
+    return payload
+
+
+def _verify_tdlib_relay(
+    cases: list[dict[str, Any]],
+    *,
+    relay_path: Path,
+    timeout: float,
+    required: bool,
+) -> dict[str, Any]:
+    if not relay_path.exists():
+        return {
+            "name": "tdlib_relay_cli_fixture",
+            "ok": not required,
+            "skipped": True,
+            "required": required,
+            "reason": f"relay_missing:{relay_path}",
+        }
+
+    failures: list[dict[str, Any]] = []
+    for case in cases:
+        actual = _relay_actual(
+            relay_path=relay_path,
+            exchange=case["exchange"],
+            title=case["title"],
+            timeout=timeout,
+        )
+        if _actual_subset(actual) != _expected_subset(case["expected"]):
+            _record_mismatch(
+                failures,
+                classifier="tdlib_relay_cli",
+                case=case,
+                actual=actual,
+            )
+    return {
+        "name": "tdlib_relay_cli_fixture",
+        "ok": not failures,
+        "required": required,
+        "failures": failures,
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--fixture", type=Path, default=CASES_PATH)
+    parser.add_argument("--relay-path", type=Path, default=DEFAULT_RELAY_PATH)
+    parser.add_argument("--require-tdlib-relay", action="store_true")
+    parser.add_argument("--skip-default", action="store_true")
+    parser.add_argument("--skip-tdlib-relay", action="store_true")
+    parser.add_argument("--timeout", type=float, default=5.0)
+    args = parser.parse_args()
+
+    cases = json.loads(args.fixture.read_text(encoding="utf-8"))
+    steps = [_verify_python(cases)]
+    if not args.skip_default:
+        steps.append(_verify_default(cases))
+    if not args.skip_tdlib_relay:
+        steps.append(
+            _verify_tdlib_relay(
+                cases,
+                relay_path=args.relay_path,
+                timeout=args.timeout,
+                required=args.require_tdlib_relay,
+            )
+        )
+
+    ok = all(step["ok"] for step in steps)
+    print(
+        json.dumps(
+            {
+                "ok": ok,
+                "mode": "verify_listing_classifiers",
+                "fixture": str(args.fixture),
+                "steps": steps,
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0 if ok else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

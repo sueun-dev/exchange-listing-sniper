@@ -1,0 +1,12 @@
+.venv/
+vendor/
+.pytest_cache/
+.pycache-compile/
+__pycache__/
+*.pyc
+.env
+data/
+bin/*.dylib
+bin/*.so
+rust/listing_classifier/target/
+cpp/**/build/

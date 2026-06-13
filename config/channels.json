@@ -1,0 +1,18 @@
+{
+  "channels": [
+    {
+      "id": "upbit",
+      "exchange": "upbit",
+      "display_name": "업비트",
+      "channel_handle": "upbit_news",
+      "source_url": "https://t.me/s/upbit_news"
+    },
+    {
+      "id": "bithumb",
+      "exchange": "bithumb",
+      "display_name": "빗썸",
+      "channel_handle": "BithumbExchange",
+      "source_url": "https://t.me/s/BithumbExchange"
+    }
+  ]
+}

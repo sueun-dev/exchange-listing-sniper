@@ -1,0 +1,190 @@
+[
+  {
+    "id": "upbit_krw_market_add",
+    "exchange": "upbit",
+    "title": "[거래] 바빌론(BABY) KRW 마켓 디지털 자산 추가",
+    "expected": {
+      "signal_type": "new_listing",
+      "ticker": "BABY",
+      "tickers": ["BABY"],
+      "asset_name": "바빌론",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "BABY", "asset_name": "바빌론"}]
+    }
+  },
+  {
+    "id": "upbit_new_listing_krw_market",
+    "exchange": "upbit",
+    "title": "[거래] 월드 리버티 파이낸셜(WLFI) 신규 거래지원 안내 (KRW 마켓)",
+    "expected": {
+      "signal_type": "new_listing",
+      "ticker": "WLFI",
+      "tickers": ["WLFI"],
+      "asset_name": "월드 리버티 파이낸셜",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "WLFI", "asset_name": "월드 리버티 파이낸셜"}]
+    }
+  },
+  {
+    "id": "bithumb_won_market_add",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 시트레아(CTR) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "CTR",
+      "tickers": ["CTR"],
+      "asset_name": "시트레아",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "CTR", "asset_name": "시트레아"}]
+    }
+  },
+  {
+    "id": "bithumb_one_letter_m",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 밈코어(M) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "M",
+      "tickers": ["M"],
+      "asset_name": "밈코어",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "M", "asset_name": "밈코어"}]
+    }
+  },
+  {
+    "id": "bithumb_one_letter_h",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 휴머니티(H) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "H",
+      "tickers": ["H"],
+      "asset_name": "휴머니티",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "H", "asset_name": "휴머니티"}]
+    }
+  },
+  {
+    "id": "bithumb_multi_comma",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 월드 리버티 파이낸셜(WLFI), 밈코어(M) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "WLFI",
+      "tickers": ["WLFI", "M"],
+      "asset_name": "월드 리버티 파이낸셜",
+      "markets": ["KRW"],
+      "assets": [
+        {"ticker": "WLFI", "asset_name": "월드 리버티 파이낸셜"},
+        {"ticker": "M", "asset_name": "밈코어"}
+      ]
+    }
+  },
+  {
+    "id": "bithumb_multi_and",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 월드 리버티 파이낸셜(WLFI) 및 밈코어(M) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "WLFI",
+      "tickers": ["WLFI", "M"],
+      "asset_name": "월드 리버티 파이낸셜",
+      "markets": ["KRW"],
+      "assets": [
+        {"ticker": "WLFI", "asset_name": "월드 리버티 파이낸셜"},
+        {"ticker": "M", "asset_name": "밈코어"}
+      ]
+    }
+  },
+  {
+    "id": "bithumb_fee_event_single",
+    "exchange": "bithumb",
+    "title": "[마켓 추가/수수료 이벤트] 팔콘 파이낸스(FF) 원화 마켓 추가 (거래 수수료 무료)",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "FF",
+      "tickers": ["FF"],
+      "asset_name": "팔콘 파이낸스",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "FF", "asset_name": "팔콘 파이낸스"}]
+    }
+  },
+  {
+    "id": "bithumb_fee_event_multi",
+    "exchange": "bithumb",
+    "title": "[마켓 추가/수수료 이벤트] 슈퍼버스(SUPER), 더블제로(2Z) 원화 마켓 추가 (거래 수수료 무료)",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "SUPER",
+      "tickers": ["SUPER", "2Z"],
+      "asset_name": "슈퍼버스",
+      "markets": ["KRW"],
+      "assets": [
+        {"ticker": "SUPER", "asset_name": "슈퍼버스"},
+        {"ticker": "2Z", "asset_name": "더블제로"}
+      ]
+    }
+  },
+  {
+    "id": "bithumb_fee_event_with_trading_start",
+    "exchange": "bithumb",
+    "title": "[마켓 추가/수수료 이벤트] 오픈에덴(EDEN) 원화 마켓 추가 (거래 수수료 무료) (거래 개시 5시 30분)",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "EDEN",
+      "tickers": ["EDEN"],
+      "asset_name": "오픈에덴",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "EDEN", "asset_name": "오픈에덴"}]
+    }
+  },
+  {
+    "id": "bithumb_market_add_with_trade_open_time",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 자마(ZAMA) 원화 마켓 추가(거래 오픈 오후 5시 예정)",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "ZAMA",
+      "tickers": ["ZAMA"],
+      "asset_name": "자마",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "ZAMA", "asset_name": "자마"}]
+    }
+  },
+  {
+    "id": "upbit_btc_usdt_only",
+    "exchange": "upbit",
+    "title": "[거래] 시트레아(CTR) 신규 거래지원 안내 (BTC, USDT 마켓)",
+    "expected": null
+  },
+  {
+    "id": "upbit_scam_notice",
+    "exchange": "upbit",
+    "title": "[안내] 업비트 거래지원 사칭 및 투자 권유 사기에 대한 주의 안내",
+    "expected": null
+  },
+  {
+    "id": "upbit_deposit_trading_suspend",
+    "exchange": "upbit",
+    "title": "[디지털 자산] 루미웨이브(LWA) 리브랜딩 및 토큰 스왑에 따른 입출금 및 거래 지원 일시 중단 안내",
+    "expected": null
+  },
+  {
+    "id": "bithumb_trade_open_time_change",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 비쓰리(B3) 원화 마켓 추가 (거래 오픈 시간 변경)",
+    "expected": null
+  },
+  {
+    "id": "bithumb_airdrop_event",
+    "exchange": "bithumb",
+    "title": "[이벤트] 총 1억5천만원 상당, 시트레아(CTR) 원화마켓 추가 기념 에어드랍 이벤트",
+    "expected": null
+  },
+  {
+    "id": "bithumb_delisting_notice",
+    "exchange": "bithumb",
+    "title": "[거래지원종료] 하이스트리트(HIGH) 거래지원 종료",
+    "expected": null
+  }
+]
