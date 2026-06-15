@@ -259,7 +259,7 @@ def test_relay_process_selftest_update_reaches_native_buy_preflight():
         assert trade["ret_code"] == 0
         assert trade["reason"] == "tdlib_native_rest_preflight"
         assert trade["symbol"] == "STRKUSDT"
-        assert trade["order_link_id"] == "ls-b-321987-STRK"
+        assert trade["order_link_id"] == "ls-bithumb-321987-STRK"
         assert event["relay_received_monotonic_ns"] <= trade["trade_started_monotonic_ns"]
         assert trade["trade_started_monotonic_ns"] <= trade["trade_finished_monotonic_ns"]
         assert "trade_elapsed_ns" not in trade

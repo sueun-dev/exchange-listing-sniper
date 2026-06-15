@@ -1494,13 +1494,16 @@ bool classify_listing_title_into(
       matched = is_upbit_krw_listing(title);
       signal_type = "new_listing";
       exchange_text = "upbit";
-      order_link_exchange = "u";
+      // Full name so the orderLinkId prefix (ls-upbit-) matches the Python
+      // poller and the C++ ultra engine; single-letter codes desynced the
+      // duplicate-orderLinkId dedupe across paths.
+      order_link_exchange = "upbit";
       break;
     case ExchangeId::Bithumb:
       matched = is_bithumb_listing(title);
       signal_type = "market_add";
       exchange_text = "bithumb";
-      order_link_exchange = "b";
+      order_link_exchange = "bithumb";
       break;
     case ExchangeId::Unknown:
       return false;
@@ -3155,19 +3158,13 @@ private:
   }
 
   static std::string_view order_link_exchange_code(std::string_view exchange) {
-    if (exchange.size() == 1) {
-      return exchange;
-    }
-    if (exchange == "upbit") {
-      return "u";
-    }
-    if (exchange == "bithumb") {
-      return "b";
-    }
-    if (exchange.empty()) {
-      return "x";
-    }
-    return exchange.substr(0, 1);
+    // Must match the Python poller (ExchangeListingPoller._exchange_code) and the
+    // C++ ultra engine (order_link_exchange_code in listing_ultra_engine.cpp),
+    // both of which pass the exchange name through verbatim. Emitting the full
+    // name ("upbit"->"upbit", "bithumb"->"bithumb") keeps the orderLinkId
+    // ("ls-upbit-"/"ls-bithumb-") identical across all three paths so Bybit's
+    // duplicate-orderLinkId guard dedupes the same notice across paths.
+    return exchange;
   }
 
   const PreparedOrderRequest& prepare_order_request(
@@ -3600,7 +3597,7 @@ int run_native_order_file_scheme_self_test() {
       trade.reason != "tdlib_native_rest" ||
       trade.symbol != "STRKUSDT" ||
       trade.order_id != "file-order-1" ||
-      trade.order_link_id != "ls-b-321987-STRK" ||
+      trade.order_link_id != "ls-bithumb-321987-STRK" ||
       trade.trade_started_monotonic_ns <= 0 ||
       trade.order_send_started_monotonic_ns <= 0 ||
       trade.trade_finished_monotonic_ns <= 0 ||
@@ -4188,7 +4185,7 @@ int run_native_async_order_dispatch_self_test() {
       trade.executed ||
       trade.ret_code != -1 ||
       trade.symbol != "STRKUSDT" ||
-      trade.order_link_id != "ls-b-321987-STRK" ||
+      trade.order_link_id != "ls-bithumb-321987-STRK" ||
       trade.reason != "tdlib_native_rest_dispatched" ||
       trade.trade_started_monotonic_ns <= 0 ||
       trade.order_send_started_monotonic_ns <= 0 ||
@@ -4535,7 +4532,7 @@ int run_native_symbol_cache_self_test() {
   if (!loaded ||
       !prepared ||
       !trade.attempted ||
-      trade.order_link_id != "ls-b-321987-STRK") {
+      trade.order_link_id != "ls-bithumb-321987-STRK") {
     std::cerr << "native_symbol_cache_self_test_failed"
               << " loaded=" << loaded
               << " prepared=" << prepared
