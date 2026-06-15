@@ -14,8 +14,8 @@ existing_src = sys.modules.get("src")
 if existing_src is not None and str(MODULE_DIR) not in list(getattr(existing_src, "__path__", [])):
     sys.modules.pop("src", None)
 
-from src import tdlib_realtime_client as tdlib_module
-from src.tdlib_realtime_client import _TdlibRelay, _build_listing_matched_post
+from src import tdlib_realtime_client as tdlib_module  # noqa: E402
+from src.tdlib_realtime_client import _TdlibRelay, _build_listing_matched_post  # noqa: E402
 
 
 class _NoClockQueue:

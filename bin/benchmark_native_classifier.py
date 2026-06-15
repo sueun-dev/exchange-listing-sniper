@@ -14,7 +14,7 @@ from pathlib import Path
 MODULE_DIR = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(MODULE_DIR))
 
-from src.announcement_filter import classify_listing_title_python
+from src.announcement_filter import classify_listing_title_python  # noqa: E402
 from src.native_classifier import (  # noqa: E402
     BENCHMARK_CACHE_PATH,
     NativeClassifierBackend,

@@ -37,17 +37,47 @@
 
 ```bash
 cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
-../../.venv/bin/python main.py --exchange bithumb --no-telegram
-../../.venv/bin/python main.py --exchange bithumb --no-trade
-../../.venv/bin/python main.py --loop
-../../.venv/bin/python main.py --realtime
-../../.venv/bin/python main.py --realtime --realtime-backend race
-../../.venv/bin/python main.py --realtime --realtime-backend telethon
-../../.venv/bin/python main.py --realtime --realtime-backend tdlib
-../../.venv/bin/python main.py --login-source-telegram
-../../.venv/bin/python main.py --login-source-telegram --realtime-backend race
-../../.venv/bin/python main.py --test-telegram
+.venv/bin/python main.py --exchange bithumb --no-telegram
+.venv/bin/python main.py --exchange bithumb --no-trade
+.venv/bin/python main.py --loop
+.venv/bin/python main.py --realtime
+.venv/bin/python main.py --realtime --realtime-backend race
+.venv/bin/python main.py --realtime --realtime-backend telethon
+.venv/bin/python main.py --realtime --realtime-backend tdlib
+.venv/bin/python main.py --login-source-telegram
+.venv/bin/python main.py --login-source-telegram --realtime-backend race
+.venv/bin/python main.py --test-telegram
 ```
+
+주요 CLI 플래그 (`main.py`):
+
+- `--loop` 반복 감시, `--interval N` HTML 폴링 간격(초, 기본 15)
+- `--exchange upbit|bithumb` 단일 거래소만 1회 폴링
+- `--realtime` MTProto 실시간 수신, `--realtime-backend race|tdlib|pyrogram|telethon` (기본 `race`)
+- `--login-source-telegram` 실시간 수신용 유저 세션 로그인
+- `--no-trade` 자동매수 비활성(감지만), `--no-telegram` 알림 없이 콘솔/파일 출력
+- `--source-only` 소스 수신만 최우선, `--persist-source-events` raw source 이벤트 비동기 저장
+- `--ultra-buy` 감지→매수 핫패스만 남기고 후속 작업은 백그라운드로 이관
+- `--memory-state` dedup/state를 메모리 우선으로 처리하고 flush만 지연
+- `--strict-realtime` realtime 경로를 못 쓰면 즉시 실패, `--latency-trace` 단계별 latency 기록
+- `--reset` 감지 상태 초기화, `--verbose` 디버그 로그, `--test-telegram` 텔레그램 테스트 메시지
+
+설치:
+
+- 이 저장소는 이미 구성된 프로젝트 로컬 `.venv`(Python 3.9.6)를 그대로 사용합니다. 별도 `requirements.txt`는 없고, 런타임 의존성은 `httpx`, `Telethon`, `Pyrogram`, `TgCrypto`, `python-dotenv`, `aiohttp` 등입니다(설치 목록은 `.venv/bin/python -m pip list`로 확인).
+- Python trade WebSocket fallback(`src/bybit_trade_ws.py`)은 선택적 `websocket-client` 패키지를 쓰며, 없으면 자동으로 비활성(`is_enabled()=False`)되고 다른 transport로 폴백합니다.
+- 실시간/native 경로는 `bin/`의 컴파일된 네이티브 바이너리(`tdlib_json_relay`, `bybit_fast_path`, `bybit_ws_trade_path`)와 shared library(`liblisting_ultra_engine`, `liblisting_classifier_cpp/rust`)를 사용합니다. 이 산출물은 gitignore 대상이며 `cpp/build_*.sh`, `bin/build_native_classifiers.sh`, `rust/listing_classifier/build.sh`로 빌드합니다.
+
+테스트:
+
+```bash
+cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
+.venv/bin/python -m pytest -q
+```
+
+- 테스트 설정은 `pytest.ini`에 있고 `tests/` 만 수집하며 `vendor`, `.venv`, `data`는 제외합니다.
+- 모든 외부 I/O(텔레그램/Bybit/clock/random/filesystem)는 mock 처리되어 오프라인·결정적으로 동작합니다.
+- 현재 20개 테스트 모듈, 226개 테스트가 통과합니다. 네이티브 분류기 fixture 검증(`bin/verify_listing_classifiers.py`)도 같은 golden fixture(`tests/fixtures/listing_title_cases.json`)를 사용합니다.
 
 02 전용 텔레그램 env 키:
 
@@ -144,7 +174,7 @@ C++ fast executor의 명령 파싱은 `BUY`/`BUYBULK` frame을 고정 배열 `st
 
 race ultra-buy에서 쓰는 C++ ultra engine은 keep-warm의 Bybit symbol refresh와 공지 처리 hot path를 분리합니다. refresh가 네트워크를 잡고 있는 순간에도 공지 처리 경로는 전역 mutex를 기다리지 않고, dedup에 필요한 짧은 락만 잡은 뒤 분류/매수로 들어갑니다. C++ ultra warmup은 복수 티커용 worker thread도 미리 띄워 첫 복수 티커 공지 순간에 thread 생성이 붙지 않게 합니다.
 
-`run_race_native_buy_realtime.sh` 는 가장 공격적인 실전 수신 경로입니다. `race` 백엔드로 Telethon, TDLib, Pyrogram 중 먼저 온 이벤트를 Python/C++ fast buyer로 처리하면서, TDLib 쪽은 동시에 C++ relay 내부 native-buy도 켭니다. 즉 Telethon/Pyrogram이 먼저 받으면 기존 race 경로가 먼저 주문하고, TDLib가 먼저 받으면 Python 왕복 없이 C++ relay가 직접 주문합니다. 두 경로가 같은 공지를 동시에 잡아도 `ls-u-...` / `ls-b-...` orderLinkId를 공유하므로 Bybit 쪽 중복 orderLinkId 방어를 같이 씁니다. 대신 이 모드는 중복 주문 시도/거절 로그가 생길 수 있어, 가장 보수적인 단일 주문 경로가 필요하면 `run_tdlib_native_buy_realtime.sh` 를 씁니다.
+`run_race_native_buy_realtime.sh` 는 가장 공격적인 실전 수신 경로입니다. `race` 백엔드로 Telethon, TDLib, Pyrogram 중 먼저 온 이벤트를 Python/C++ fast buyer로 처리하면서, TDLib 쪽은 동시에 C++ relay 내부 native-buy도 켭니다. 즉 Telethon/Pyrogram이 먼저 받으면 기존 race 경로가 먼저 주문하고, TDLib가 먼저 받으면 Python 왕복 없이 C++ relay가 직접 주문합니다. 두 경로가 같은 공지를 동시에 잡으면 orderLinkId prefix가 서로 달라(Python/C++ ultra는 `ls-upbit-...` / `ls-bithumb-...`, TDLib relay는 `ls-u-...` / `ls-b-...`) Bybit 중복 orderLinkId 방어가 두 경로 사이에서는 걸리지 않고 중복 주문 시도/거절 로그가 생길 수 있습니다. 가장 보수적인 단일 주문 경로가 필요하면 `run_tdlib_native_buy_realtime.sh` 를 씁니다.
 
 race 실전 스크립트는 `LISTING_CPP_ULTRA_REQUIRE_WARMUP=1`과 `BYBIT_REQUIRE_FAST_EXECUTOR_WARMUP=1`도 켭니다. 그래서 Telethon/Pyrogram fallback이 먼저 이겼을 때 C++ ultra engine 또는 C++ fast executor가 빈 spot cache/cold order client 상태면 warning만 내고 감시를 시작하지 않고, 시작 전에 실패시킵니다. 또한 `LISTING_RACE_MIN_READY_BACKENDS=2`를 기본으로 둬서 TDLib 하나만 살아 있는 상태를 “race 준비 완료”로 취급하지 않습니다. 이 검사들은 startup gate라 공지 도착 후 주문 hot path에는 들어가지 않습니다.
 
@@ -192,7 +222,7 @@ TDLib native-buy가 활성인 경우 Python 쪽 Bybit spot buyer와 C++ ultra-en
 
 TDLib native buyer는 Bybit spot symbol cache refresh가 성공할 때 `data/tdlib_bybit_spot_symbols.txt`에 심볼 목록을 저장합니다. 다음 실행에서 이 캐시가 300초 이내이고 최소 100개 이상의 심볼을 담고 있으면 전체 `/v5/market/instruments-info` refresh를 시작 전에 기다리지 않고 바로 캐시를 게시한 뒤 주문용 curl client warmup으로 넘어갑니다. 캐시가 없거나 오래됐거나 너무 작으면 기존처럼 Bybit에서 전체 spot symbol을 새로 받습니다. Keep-warm thread는 시작 직후에도 symbol cache를 먼저 refresh하고 그 다음 order client와 parallel order client를 refresh해서, strict cache 모드에서 stale/partial cache 때문에 실제 존재하는 `TICKERUSDT`를 놓치는 시간을 줄입니다. 실전 스크립트는 주문용 hot curl client keepalive를 기본 5초로 더 자주 돌리고, 전체 spot symbol refresh는 기존 `KEEP_WARM_INTERVAL` 기본 15초로 분리합니다. 이렇게 하면 주문 연결은 더 덜 식게 유지하면서도 전체 심볼 refresh가 매 5초마다 도는 background 잡음은 피합니다. 실전 스크립트는 `LISTING_TDLIB_NATIVE_BLOCKING_HOT_ORDER_WARMUP=1`도 켜서 `ready=true` 전에 hot primary/parallel order client를 한 번 동기 refresh합니다. 그래서 시작 직후 첫 공지가 오더라도 첫 실주문이 cold TLS/DNS를 탈 가능성을 줄입니다. 다만 background keep-warm이 공지 순간과 겹쳐 TDLib receive/order thread scheduling을 방해하지 않도록, 네트워크로 새로 데우는 parallel order client 수는 기본 4개로 제한합니다. worker와 주문 가능 티커 수는 그대로라서 5개 이상 복수 티커도 주문은 나가며, 초과 티커는 이미 priming된 base client를 사용합니다. 이 즉시 refresh는 `LISTING_TDLIB_NATIVE_IMMEDIATE_KEEPWARM_REFRESH=0`으로 끌 수 있지만 실전 최속 모드에서는 켜둡니다. libcurl이 지원하는 빌드에서는 `TCP_FASTOPEN`도 켜서 cold TCP 연결의 첫 요청 지연을 줄입니다.
 
-복수 티커 공지는 C++ relay가 모든 티커를 추출하고, native-buy 활성 상태에서는 각 티커 주문을 병렬로 발사합니다. 즉 `SENT`, `ELSA` 같은 공지에서 두 번째 티커가 첫 번째 주문 응답을 기다린 뒤 나가는 구조가 아닙니다. native-buy worker와 worker별 curl client도 `ready=true`를 내보내기 전에 동기적으로 띄우고 데워 두기 때문에, 시작 직후 첫 복수 티커 공지 순간에도 `std::thread` 생성이나 worker client의 첫 DNS/TLS 비용이 주문 직전에 붙지 않게 합니다. 주문용 curl handle은 준비 단계에서만 데우고, background keep-warm은 symbol cache 전용 handle만 사용해 실제 주문 handle과 동시에 같은 easy handle을 쓰지 않습니다. 주문 curl handle은 매 주문마다 `curl_easy_reset`으로 고정 옵션을 다시 세팅하지 않고, URL/POST mode/body/header처럼 요청마다 필요한 값만 갈아끼웁니다. `/v5/order/create` URL, POST mode, order response callback은 warmup 때 먼저 priming해서 매수 순간 고정 setopt를 줄입니다. Bybit spot symbol cache도 C++ relay 내부 background keep-warm으로 주기 갱신하므로, 오래 켜둔 프로세스가 stale cache 때문에 실제 존재하는 `TICKERUSDT`를 놓칠 가능성을 줄입니다. Native Bybit buyer는 시작 시 `buy_enabled + api key + api secret + quote amount` 설정을 `config_ready` boolean으로 접어두고, 실주문 경로에서는 여러 문자열 상태를 매번 다시 확인하지 않습니다. Native Bybit 인증 헤더도 content-type/API-key/recv-window는 static string pointer로 재사용하고, 매 주문마다 바뀌는 sign/timestamp header만 새로 만듭니다. API key + recv-window 서명 고정 조각과 주문 body의 고정 조각도 시작 시 미리 만들어 주문 순간 문자열 조립을 줄입니다. 주문 body, auth plain text, sign/timestamp header는 thread-local scratch를 재사용하고 warmup 및 worker 시작 시 scratch를 데워 첫 실주문 순간의 heap allocation을 줄입니다. HMAC은 API secret 기준 ipad/opad를 시작 시 미리 계산하고, signature는 중간 문자열을 만들지 않고 `X-BAPI-SIGN` header에 바로 hex append합니다. 주문 URL은 client 생성 시 만든 `/v5/order/create` 문자열을 재사용해 매수 순간 `base_url + path` 조립을 피합니다. libcurl header list도 매 주문마다 `curl_slist_append/free`를 하지 않고 stack node 5개를 연결해 heap 할당을 피합니다. `orderLinkId`는 실제 주문 시도 직전에만 구성하고, buy disabled/spot unavailable 같은 no-order 경로에서는 만들지 않습니다. Native TDLib와 Python/race C++ executor는 같은 공지에 대해 같은 `ls-u-...` / `ls-b-...` orderLinkId prefix를 쓰므로, 실험 중 두 경로가 겹쳐도 Bybit 중복 orderLinkId 방어를 공유합니다. 주문 성공 경로에서는 로그/결과용 `NativeTradeResult` 전체 객체 구성도 주문 body/auth와 libcurl send 준비가 끝난 뒤로 늦춰, 매수 요청 발사 전 구간에 후처리 문자열 초기화가 끼지 않게 합니다.
+복수 티커 공지는 C++ relay가 모든 티커를 추출하고, native-buy 활성 상태에서는 각 티커 주문을 병렬로 발사합니다. 즉 `SENT`, `ELSA` 같은 공지에서 두 번째 티커가 첫 번째 주문 응답을 기다린 뒤 나가는 구조가 아닙니다. native-buy worker와 worker별 curl client도 `ready=true`를 내보내기 전에 동기적으로 띄우고 데워 두기 때문에, 시작 직후 첫 복수 티커 공지 순간에도 `std::thread` 생성이나 worker client의 첫 DNS/TLS 비용이 주문 직전에 붙지 않게 합니다. 주문용 curl handle은 준비 단계에서만 데우고, background keep-warm은 symbol cache 전용 handle만 사용해 실제 주문 handle과 동시에 같은 easy handle을 쓰지 않습니다. 주문 curl handle은 매 주문마다 `curl_easy_reset`으로 고정 옵션을 다시 세팅하지 않고, URL/POST mode/body/header처럼 요청마다 필요한 값만 갈아끼웁니다. `/v5/order/create` URL, POST mode, order response callback은 warmup 때 먼저 priming해서 매수 순간 고정 setopt를 줄입니다. Bybit spot symbol cache도 C++ relay 내부 background keep-warm으로 주기 갱신하므로, 오래 켜둔 프로세스가 stale cache 때문에 실제 존재하는 `TICKERUSDT`를 놓칠 가능성을 줄입니다. Native Bybit buyer는 시작 시 `buy_enabled + api key + api secret + quote amount` 설정을 `config_ready` boolean으로 접어두고, 실주문 경로에서는 여러 문자열 상태를 매번 다시 확인하지 않습니다. Native Bybit 인증 헤더도 content-type/API-key/recv-window는 static string pointer로 재사용하고, 매 주문마다 바뀌는 sign/timestamp header만 새로 만듭니다. API key + recv-window 서명 고정 조각과 주문 body의 고정 조각도 시작 시 미리 만들어 주문 순간 문자열 조립을 줄입니다. 주문 body, auth plain text, sign/timestamp header는 thread-local scratch를 재사용하고 warmup 및 worker 시작 시 scratch를 데워 첫 실주문 순간의 heap allocation을 줄입니다. HMAC은 API secret 기준 ipad/opad를 시작 시 미리 계산하고, signature는 중간 문자열을 만들지 않고 `X-BAPI-SIGN` header에 바로 hex append합니다. 주문 URL은 client 생성 시 만든 `/v5/order/create` 문자열을 재사용해 매수 순간 `base_url + path` 조립을 피합니다. libcurl header list도 매 주문마다 `curl_slist_append/free`를 하지 않고 stack node 5개를 연결해 heap 할당을 피합니다. `orderLinkId`는 실제 주문 시도 직전에만 구성하고, buy disabled/spot unavailable 같은 no-order 경로에서는 만들지 않습니다. Native TDLib relay는 같은 공지에 대해 `ls-u-...` / `ls-b-...` orderLinkId prefix를 쓰고, Python/race C++ ultra executor는 `ls-upbit-...` / `ls-bithumb-...` prefix를 씁니다. 두 prefix가 다르므로 두 경로가 겹치면 Bybit 중복 orderLinkId 방어가 경로 간에는 걸리지 않습니다(이래서 race+TDLib native 동시 모드는 중복 주문 시도가 생길 수 있고, 단일 주문 보장이 필요하면 tdlib 단독 스크립트를 씁니다). 주문 성공 경로에서는 로그/결과용 `NativeTradeResult` 전체 객체 구성도 주문 body/auth와 libcurl send 준비가 끝난 뒤로 늦춰, 매수 요청 발사 전 구간에 후처리 문자열 초기화가 끼지 않게 합니다.
 
 실전 재시작 시간을 더 줄이기 위해 최속 실행 스크립트는 현재 검증된 공식 TDLib chat id를 기본값으로 넣습니다.
 
@@ -212,8 +242,8 @@ C++ relay 안에서는 watch chat 목록을 immutable raw-pointer snapshot으로
 
 ```bash
 cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
-../../.venv/bin/python bin/benchmark_latency.py --iterations 2000
-../../.venv/bin/python bin/benchmark_cpp_ultra_preflight.py --iterations 100000
+.venv/bin/python bin/benchmark_latency.py --iterations 2000
+.venv/bin/python bin/benchmark_cpp_ultra_preflight.py --iterations 100000
 ./bin/tdlib_json_relay --benchmark-tdlib-message-disabled 20000
 ./bin/tdlib_json_relay --benchmark-tdlib-message-buy-preflight 20000
 ./bin/tdlib_json_relay --benchmark-tdlib-message-buy-preflight-upbit 20000
@@ -272,7 +302,7 @@ cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
 ```bash
 cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
 bash ./bin/build_native_classifiers.sh
-../../.venv/bin/python ./bin/benchmark_native_classifier.py --iterations 100000 --skip-build
+.venv/bin/python ./bin/benchmark_native_classifier.py --iterations 100000 --skip-build
 ```
 
 - `LISTING_CLASSIFIER_BACKEND=cpp|rust|auto|python` 으로 강제 가능
@@ -290,19 +320,19 @@ bash ./bin/build_native_classifiers.sh
 
 ```bash
 cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
-../../.venv/bin/python bin/benchmark_live_ingest.py bench --iterations 24 --timeout 20 --pause-sec 0.75
-../../.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-listing --iterations 1 --timeout 60
-../../.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-buy-ready --iterations 1 --timeout 10
-../../.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-preflight-inject --iterations 3 --timeout 10
-../../.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-file-order-inject --iterations 3 --timeout 10
-../../.venv/bin/python bin/tdlib_symbol_cache.py check
-../../.venv/bin/python bin/tdlib_symbol_cache.py refresh
-../../.venv/bin/python bin/trading_config_gate.py check
-../../.venv/bin/python bin/verify_listing_classifiers.py --require-tdlib-relay
-../../.venv/bin/python bin/race_fallback_readiness.py check
-../../.venv/bin/python bin/fast_readiness_gate.py --live-inject --require-symbol-cache --require-trading-config --race-fallback-warmup
-../../.venv/bin/python bin/fast_readiness_gate.py --strict-live-tdlib
-../../.venv/bin/python bin/fast_readiness_gate.py --strict-live-race
+.venv/bin/python bin/benchmark_live_ingest.py bench --iterations 24 --timeout 20 --pause-sec 0.75
+.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-listing --iterations 1 --timeout 60
+.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-buy-ready --iterations 1 --timeout 10
+.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-preflight-inject --iterations 3 --timeout 10
+.venv/bin/python bin/benchmark_live_ingest.py bench --backend tdlib --native-file-order-inject --iterations 3 --timeout 10
+.venv/bin/python bin/tdlib_symbol_cache.py check
+.venv/bin/python bin/tdlib_symbol_cache.py refresh
+.venv/bin/python bin/trading_config_gate.py check
+.venv/bin/python bin/verify_listing_classifiers.py --require-tdlib-relay
+.venv/bin/python bin/race_fallback_readiness.py check
+.venv/bin/python bin/fast_readiness_gate.py --live-inject --require-symbol-cache --require-trading-config --race-fallback-warmup
+.venv/bin/python bin/fast_readiness_gate.py --strict-live-tdlib
+.venv/bin/python bin/fast_readiness_gate.py --strict-live-race
 ./bin/check_tdlib_native_buy_realtime.sh
 ```
 
@@ -353,7 +383,8 @@ Bybit 자동매수 env 키:
 - 기본값은 `marketUnit=quoteCoin`
 - 즉 주문 전에 ask 조회/수량 계산을 하지 않고, 설정한 USDT 금액으로 바로 주문
 - `BYBIT_QUERY_FILL_AFTER_BUY=false` 기본값이라 주문 직후 추가 fill 조회도 생략
-- 중복 방지를 위해 `orderLinkId=ls-u-message_id-ticker` 또는 `ls-b-message_id-ticker` 형식 사용
+- 중복 방지를 위해 Python poller 와 C++ ultra engine 경로는 `orderLinkId=ls-upbit-message_id-ticker` 또는 `ls-bithumb-message_id-ticker` 형식을 사용 (`src/poller.py`의 `_exchange_code`는 거래소 이름을 그대로 prefix로 씀, `cpp/listing_ultra_engine.cpp`의 `order_link_exchange_code`도 동일)
+- TDLib C++ relay native-buy 경로(`cpp/tdlib_json_relay.cpp`)는 더 짧은 `ls-u-message_id-ticker` / `ls-b-message_id-ticker` prefix를 씀. 따라서 같은 공지를 TDLib native 와 Python/C++ ultra 가 동시에 잡으면 orderLinkId가 달라 Bybit 중복 orderLinkId 방어가 두 경로 사이에서는 적용되지 않고 중복 주문 시도가 생길 수 있음. 단일 주문만 보장하려면 `run_tdlib_native_buy_realtime.sh`(tdlib 단독 백엔드)를 사용
 
 C++ fast path:
 
