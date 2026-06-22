@@ -47,6 +47,22 @@ def test_seen_message_window_is_bounded(tmp_path):
     assert MAX_SEEN_MESSAGE_IDS + 19 in seen
 
 
+def test_seen_listing_tickers_is_unbounded(tmp_path):
+    # The per-(channel, ticker) listing dedup is the authoritative money backstop
+    # against re-buying a ticker on a re-posted announcement, so it must NOT evict
+    # entries the way the message-id window does. Guard the invariant explicitly.
+    state_file = tmp_path / "state.json"
+    store = StateStore(state_file=state_file)
+
+    count = MAX_SEEN_MESSAGE_IDS + 500
+    for index in range(count):
+        assert store.mark_listing_seen("bithumb", f"TCK{index}", index, persist=False)
+
+    assert store.has_seen_listing("bithumb", "TCK0")
+    assert store.has_seen_listing("bithumb", f"TCK{count - 1}")
+    assert not store.mark_listing_seen("bithumb", "TCK0", 999999, persist=False)
+
+
 def test_hot_state_snapshot_persists_recent_seen_message_ids(tmp_path):
     state_file = tmp_path / "state.json"
     store = StateStore(state_file=state_file)

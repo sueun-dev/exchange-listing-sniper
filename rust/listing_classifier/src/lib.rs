@@ -57,6 +57,9 @@ fn is_allowed_bithumb_market_add_suffix(suffix: &str) -> bool {
         || trimmed.starts_with("(거래수수료 무료)")
         || trimmed.contains("거래 오픈")
         || trimmed.contains("거래 개시")
+        // A symbol-rename re-announcement is a genuine tradeable 원화 마켓 추가.
+        || trimmed.contains("심볼명 변경")
+        || trimmed.contains("심볼 변경")
         || (trimmed.starts_with("및 ") && trimmed.ends_with(" 안내"))
 }
 
@@ -101,8 +104,12 @@ fn extract_ticker_candidates(title: &str) -> Vec<String> {
         if end >= bytes.len() {
             break;
         }
-        let candidate = &title[i + 1..end];
+        // Trim inner spaces and require a letter so "( BABY )" matches "(BABY)"
+        // and an all-digit token (a year/amount) is never read as the ticker —
+        // keeps this classifier identical to the Python/ultra paths.
+        let candidate = title[i + 1..end].trim();
         if (1..=10).contains(&candidate.len())
+            && candidate.bytes().any(|b| b.is_ascii_uppercase())
             && candidate
                 .bytes()
                 .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
@@ -206,6 +213,56 @@ fn extract_asset_name(title: &str) -> String {
     trim_ascii(&title[bracket + 1..open])
 }
 
+fn is_ticker_token(candidate: &str) -> bool {
+    (1..=10).contains(&candidate.len())
+        && candidate.bytes().any(|b| b.is_ascii_uppercase())
+        && candidate
+            .bytes()
+            .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit())
+}
+
+fn normalize_asset_segment(segment: &str) -> String {
+    let value = segment.trim().trim_start_matches(',').trim();
+    for prefix in ["및 ", "and ", "& ", "/ ", "· "] {
+        if let Some(rest) = value.strip_prefix(prefix) {
+            return rest.trim().to_string();
+        }
+    }
+    value.to_string()
+}
+
+// Ticker-aware asset name (matches Python and the cpp/ultra paths): the name is
+// the segment preceding the chosen ticker's parenthetical, so a skipped leading
+// parenthetical (e.g. a year) stays with the name. Keeps asset_name identical.
+fn extract_asset_name_for_ticker(title: &str, ticker: &str) -> String {
+    let mut name_start = match title.find(']') {
+        Some(bracket) => bracket + 1,
+        None => 0,
+    };
+    let mut search = name_start;
+    while search < title.len() {
+        let Some(open) = title[search..].find('(').map(|idx| idx + search) else {
+            break;
+        };
+        let Some(close) = title[open + 1..].find(')').map(|idx| idx + open + 1) else {
+            break;
+        };
+        let candidate = title[open + 1..close].trim();
+        if !matches!(candidate, "KRW" | "BTC" | "USDT" | "ETH") && is_ticker_token(candidate) {
+            if candidate == ticker {
+                let asset = normalize_asset_segment(&title[name_start..open]);
+                if !asset.is_empty() {
+                    return asset;
+                }
+                break;
+            }
+            name_start = close + 1;
+        }
+        search = close + 1;
+    }
+    extract_asset_name(title)
+}
+
 fn copy_to_buffer(value: &str, output: &mut [c_char]) {
     output.fill(0);
     let bytes = value.as_bytes();
@@ -213,6 +270,56 @@ fn copy_to_buffer(value: &str, output: &mut [c_char]) {
     for (idx, byte) in bytes.iter().take(copy_len).enumerate() {
         output[idx] = *byte as c_char;
     }
+}
+
+fn first_ticker_paren_open(title: &str) -> Option<usize> {
+    let mut search = match title.find(']') {
+        Some(bracket) => bracket + 1,
+        None => 0,
+    };
+    while let Some(rel) = title[search..].find('(') {
+        let open = search + rel;
+        let close = match title[open + 1..].find(')') {
+            Some(idx) => open + 1 + idx,
+            None => return None,
+        };
+        let candidate = title[open + 1..close].trim();
+        if !matches!(candidate, "KRW" | "BTC" | "USDT" | "ETH") && is_ticker_token(candidate) {
+            return Some(open);
+        }
+        search = close + 1;
+    }
+    None
+}
+
+// Blank the asset-name span so exclude keywords inside the asset's own name do
+// not drop a genuine listing; the prefix and tail are still scanned. See [11].
+fn exclude_scan_text(title: &str) -> String {
+    let Some(bracket) = title.find(']') else {
+        return title.to_string();
+    };
+    let name_start = bracket + 1;
+    let Some(open) = first_ticker_paren_open(title) else {
+        return title.to_string();
+    };
+    if open <= name_start {
+        return title.to_string();
+    }
+    format!("{} {}", &title[..name_start], &title[open..])
+}
+
+fn remainder_is_only_parentheticals(text: &str) -> bool {
+    let mut text = text.trim_start();
+    while !text.is_empty() {
+        if !text.starts_with('(') {
+            return false;
+        }
+        let Some(close) = text.find(')') else {
+            return false;
+        };
+        text = text[close + 1..].trim_start();
+    }
+    true
 }
 
 /// Classify an exchange announcement title into a native listing result.
@@ -250,21 +357,24 @@ pub unsafe extern "C" fn classify_listing_title(
     let (matched, signal_type) = match exchange {
         "upbit" => (
             title.starts_with("[거래]")
-                && contains_none(title, &UPBIT_EXCLUDE_KEYWORDS)
+                && contains_none(&exclude_scan_text(title), &UPBIT_EXCLUDE_KEYWORDS)
                 && has_ascii_word(title, "KRW")
                 && if let Some(anchor) = title.find("신규 거래지원 안내") {
                     find_market_parenthetical_end(title, anchor)
-                        .map(|end| title[end..].trim().is_empty())
+                        .map(|end| remainder_is_only_parentheticals(&title[end..]))
                         .unwrap_or(false)
+                } else if let Some(idx) = title.rfind("마켓 디지털 자산 추가") {
+                    remainder_is_only_parentheticals(
+                        &title[idx + "마켓 디지털 자산 추가".len()..],
+                    )
                 } else {
-                    title.contains("마켓 디지털 자산 추가")
-                        && title.trim_end().ends_with("마켓 디지털 자산 추가")
+                    false
                 },
             "new_listing",
         ),
         "bithumb" => (
             has_bithumb_listing_prefix(title)
-                && contains_none(title, &BITHUMB_EXCLUDE_KEYWORDS)
+                && contains_none(&exclude_scan_text(title), &BITHUMB_EXCLUDE_KEYWORDS)
                 && !title.contains("원화 마켓 재거래지원 안내")
                 && title
                     .find("원화 마켓 추가")
@@ -288,7 +398,7 @@ pub unsafe extern "C" fn classify_listing_title(
     out.matched = 1;
     out.market_flags = extract_market_flags(title);
     copy_to_buffer(&ticker, &mut out.ticker);
-    copy_to_buffer(&extract_asset_name(title), &mut out.asset_name);
+    copy_to_buffer(&extract_asset_name_for_ticker(title, &ticker), &mut out.asset_name);
     copy_to_buffer(signal_type, &mut out.signal_type);
     1
 }

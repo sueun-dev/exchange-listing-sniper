@@ -484,7 +484,11 @@ public:
   }
 
 private:
-  static constexpr size_t SLOT_COUNT = 256;
+  // Direct-mapped message-id dedup cache. Enlarged from 256 so a re-delivered
+  // (edited/duplicate) Telegram update is far less likely to be evicted and
+  // re-bought; the deterministic orderLinkId remains the cross-process backstop.
+  // 8192 * 8 bytes = 64KB, negligible. See [24].
+  static constexpr size_t SLOT_COUNT = 8192;
   static_assert((SLOT_COUNT & (SLOT_COUNT - 1)) == 0);
 
   static uint64_t make_key(ExchangeId exchange_id, long long message_id) {
@@ -668,6 +672,32 @@ bool is_positive_decimal_text(std::string_view value) {
     saw_nonzero = saw_nonzero || ch != '0';
   }
   return saw_digit && saw_nonzero;
+}
+
+// Money-safety gate for the native order amount: a positive decimal that is also
+// at or below BYBIT_SPOT_BUY_MAX_USDT_AMOUNT (default 1000). is_positive_decimal_text
+// already rejects negatives / non-finite / non-numeric, so this adds the ceiling
+// so a fat-finger amount refuses to fire a native order. Mirrors the Python buyer.
+bool is_valid_quote_amount(std::string_view value) {
+  if (!is_positive_decimal_text(value)) {
+    return false;
+  }
+  double amount = 0.0;
+  try {
+    amount = std::stod(std::string(value));
+  } catch (...) {
+    return false;
+  }
+  double ceiling = 1000.0;
+  const std::string ceiling_text = getenv_or("BYBIT_SPOT_BUY_MAX_USDT_AMOUNT", "1000");
+  if (is_positive_decimal_text(ceiling_text)) {
+    try {
+      ceiling = std::stod(ceiling_text);
+    } catch (...) {
+      ceiling = 1000.0;
+    }
+  }
+  return amount > 0.0 && amount <= ceiling;
 }
 
 std::string_view spot_symbol_view(std::string_view ticker, std::array<char, 32>& buffer) {
@@ -1158,6 +1188,26 @@ bool has_ascii_word(std::string_view title, std::string_view needle) {
 }
 
 std::string_view trim_ascii_view(std::string_view value);
+std::string normalize_asset_segment(std::string_view segment);
+
+// A ticker token is 1-10 [A-Z0-9] chars with at least one letter (already
+// trimmed by the caller). The letter requirement rejects all-digit tokens like
+// a year (2024) so they are never read as a ticker — identical to the Python
+// and standalone-classifier rule, keeping every path's verdict in lockstep.
+bool is_ticker_token(std::string_view candidate) {
+  if (candidate.empty() || candidate.size() > 10) {
+    return false;
+  }
+  bool has_alpha = false;
+  for (char ch : candidate) {
+    if (std::isupper(static_cast<unsigned char>(ch))) {
+      has_alpha = true;
+    } else if (!std::isdigit(static_cast<unsigned char>(ch))) {
+      return false;
+    }
+  }
+  return has_alpha;
+}
 
 std::vector<std::string> extract_ticker_candidates(std::string_view title) {
   std::vector<std::string> candidates;
@@ -1170,18 +1220,7 @@ std::vector<std::string> extract_ticker_candidates(std::string_view title) {
       break;
     }
     const auto candidate = trim_ascii_view(title.substr(i + 1, end - i - 1));
-    if (candidate.empty() || candidate.size() > 10) {
-      i = end;
-      continue;
-    }
-    bool valid = true;
-    for (char ch : candidate) {
-      if (!is_ascii_upper_or_digit(ch)) {
-        valid = false;
-        break;
-      }
-    }
-    if (valid) {
+    if (is_ticker_token(candidate)) {
       candidates.emplace_back(candidate);
     }
     i = end;
@@ -1199,8 +1238,14 @@ bool is_market_code(std::string_view candidate) {
 }
 
 void extract_listing_tickers_into(std::string_view title, ListingTickers& tickers) {
+  // Asset-name-aware extraction matching Python _collect_asset_ticker_pairs and
+  // the ultra engine: only a parenthetical preceded by a non-empty asset-name
+  // segment is a ticker, so a chained/standalone parenthetical with no name
+  // (e.g. "월드(WLFI)(M)" -> [WLFI]) is not bought. front() stays the primary.
   tickers.clear();
-  size_t search = 0;
+  const size_t bracket = title.find(']');
+  size_t name_start = bracket == std::string_view::npos ? 0 : bracket + 1;
+  size_t search = name_start;
   while (search < title.size()) {
     const size_t open = title.find('(', search);
     if (open == std::string_view::npos) {
@@ -1211,19 +1256,14 @@ void extract_listing_tickers_into(std::string_view title, ListingTickers& ticker
       break;
     }
     const auto candidate = trim_ascii_view(title.substr(open + 1, end - open - 1));
-    if (candidate.empty() || candidate.size() > 10 || is_market_code(candidate)) {
-      search = end + 1;
-      continue;
-    }
-    bool valid = true;
-    for (char ch : candidate) {
-      if (!is_ascii_upper_or_digit(ch)) {
-        valid = false;
-        break;
+    if (!is_market_code(candidate) && is_ticker_token(candidate) &&
+        !tickers.contains(candidate)) {
+      const std::string asset_name =
+          normalize_asset_segment(title.substr(name_start, open - name_start));
+      if (!asset_name.empty()) {
+        tickers.push_unique(candidate);
+        name_start = end + 1;
       }
-    }
-    if (valid) {
-      tickers.push_unique(candidate);
     }
     search = end + 1;
   }
@@ -1389,6 +1429,54 @@ std::string_view extract_asset_name_view(std::string_view title) {
   return trim_ascii_view(title.substr(bracket + 1, open - bracket - 1));
 }
 
+std::string normalize_asset_segment(std::string_view segment) {
+  std::string value = trim_ascii(std::string(segment));
+  while (!value.empty() && value.front() == ',') {
+    value.erase(value.begin());
+    value = trim_ascii(std::move(value));
+  }
+  constexpr std::string_view prefixes[] = {"및 ", "and ", "& ", "/ ", "· "};
+  for (const auto prefix : prefixes) {
+    if (value.rfind(prefix, 0) == 0) {
+      return trim_ascii(value.substr(prefix.size()));
+    }
+  }
+  return value;
+}
+
+// Ticker-aware asset name (matches Python and the cpp/ultra paths): the name is
+// the segment preceding the chosen ticker's parenthetical, so a skipped leading
+// parenthetical (e.g. a year) stays with the name. Keeps asset_name identical.
+std::string extract_asset_name_for_ticker(std::string_view title, std::string_view ticker) {
+  const size_t bracket = title.find(']');
+  size_t name_start = bracket == std::string_view::npos ? 0 : bracket + 1;
+  size_t search = name_start;
+  while (search < title.size()) {
+    const size_t open = title.find('(', search);
+    if (open == std::string_view::npos) {
+      break;
+    }
+    const size_t close = title.find(')', open + 1);
+    if (close == std::string_view::npos) {
+      break;
+    }
+    const auto candidate = trim_ascii_view(title.substr(open + 1, close - open - 1));
+    if (!is_market_code(candidate) && is_ticker_token(candidate)) {
+      if (candidate == ticker) {
+        const std::string asset_name =
+            normalize_asset_segment(title.substr(name_start, open - name_start));
+        if (!asset_name.empty()) {
+          return asset_name;
+        }
+        break;
+      }
+      name_start = close + 1;
+    }
+    search = close + 1;
+  }
+  return std::string(extract_asset_name_view(title));
+}
+
 bool is_allowed_bithumb_market_add_suffix(std::string_view suffix) {
   const std::string_view trimmed = trim_ascii_view(suffix);
   if (trimmed.empty() ||
@@ -1418,6 +1506,11 @@ bool is_allowed_bithumb_market_add_suffix(std::string_view suffix) {
       trimmed.find("거래 개시") != std::string::npos) {
     return true;
   }
+  // A symbol-rename re-announcement is a genuine tradeable 원화 마켓 추가.
+  if (trimmed.find("심볼명 변경") != std::string::npos ||
+      trimmed.find("심볼 변경") != std::string::npos) {
+    return true;
+  }
   constexpr std::string_view suffix_end = " 안내";
   return trimmed.rfind("및 ", 0) == 0 &&
          trimmed.size() >= suffix_end.size() &&
@@ -1436,6 +1529,59 @@ bool has_bithumb_listing_prefix(std::string_view title) {
   return false;
 }
 
+size_t first_ticker_paren_open(std::string_view title) {
+  const size_t bracket = title.find(']');
+  size_t search = bracket == std::string_view::npos ? 0 : bracket + 1;
+  while (true) {
+    const size_t open = title.find('(', search);
+    if (open == std::string_view::npos) {
+      return std::string_view::npos;
+    }
+    const size_t close = title.find(')', open + 1);
+    if (close == std::string_view::npos) {
+      return std::string_view::npos;
+    }
+    const auto candidate = trim_ascii_view(title.substr(open + 1, close - open - 1));
+    if (!is_market_code(candidate) && is_ticker_token(candidate)) {
+      return open;
+    }
+    search = close + 1;
+  }
+}
+
+// Blank the asset-name span so exclude keywords inside the asset's own name do
+// not drop a genuine listing; the prefix and tail are still scanned. See [11].
+std::string exclude_scan_text(std::string_view title) {
+  const size_t bracket = title.find(']');
+  if (bracket == std::string_view::npos) {
+    return std::string(title);
+  }
+  const size_t name_start = bracket + 1;
+  const size_t open = first_ticker_paren_open(title);
+  if (open == std::string_view::npos || open <= name_start) {
+    return std::string(title);
+  }
+  std::string result(title.substr(0, name_start));
+  result.append(open - name_start, ' ');
+  result.append(title.substr(open));
+  return result;
+}
+
+bool remainder_is_only_parentheticals(std::string_view text) {
+  text = trim_ascii_view(text);
+  while (!text.empty()) {
+    if (text.front() != '(') {
+      return false;
+    }
+    const size_t close = text.find(')');
+    if (close == std::string_view::npos) {
+      return false;
+    }
+    text = trim_ascii_view(text.substr(close + 1));
+  }
+  return true;
+}
+
 bool is_upbit_krw_listing(std::string_view title) {
   if (title.rfind("[거래]", 0) != 0) {
     return false;
@@ -1448,22 +1594,21 @@ bool is_upbit_krw_listing(std::string_view title) {
         new_listing_pos);
     if (market_end == std::string_view::npos ||
         !has_ascii_word(title.substr(new_listing_pos, market_end - new_listing_pos), "KRW") ||
-        !trim_ascii_view(title.substr(market_end)).empty()) {
+        !remainder_is_only_parentheticals(title.substr(market_end))) {
       return false;
     }
-    return contains_none(title, UPBIT_EXCLUDE_KEYWORDS, std::size(UPBIT_EXCLUDE_KEYWORDS));
+    return contains_none(exclude_scan_text(title), UPBIT_EXCLUDE_KEYWORDS,
+                         std::size(UPBIT_EXCLUDE_KEYWORDS));
   }
   constexpr std::string_view krw_market_add_suffix = "KRW 마켓 디지털 자산 추가";
-  const std::string_view trimmed = trim_ascii_view(title);
-  if (title.find(krw_market_add_suffix) == std::string_view::npos ||
-      trimmed.size() < krw_market_add_suffix.size() ||
-      trimmed.compare(
-          trimmed.size() - krw_market_add_suffix.size(),
-          krw_market_add_suffix.size(),
-          krw_market_add_suffix) != 0) {
+  const size_t marker_idx = title.rfind(krw_market_add_suffix);
+  if (marker_idx == std::string_view::npos ||
+      !remainder_is_only_parentheticals(
+          title.substr(marker_idx + krw_market_add_suffix.size()))) {
     return false;
   }
-  return contains_none(title, UPBIT_EXCLUDE_KEYWORDS, std::size(UPBIT_EXCLUDE_KEYWORDS));
+  return contains_none(exclude_scan_text(title), UPBIT_EXCLUDE_KEYWORDS,
+                       std::size(UPBIT_EXCLUDE_KEYWORDS));
 }
 
 bool is_bithumb_listing(std::string_view title) {
@@ -1478,7 +1623,8 @@ bool is_bithumb_listing(std::string_view title) {
   if (!is_allowed_bithumb_market_add_suffix(title.substr(marker_pos + marker.size()))) {
     return false;
   }
-  return contains_none(title, BITHUMB_EXCLUDE_KEYWORDS, std::size(BITHUMB_EXCLUDE_KEYWORDS));
+  return contains_none(exclude_scan_text(title), BITHUMB_EXCLUDE_KEYWORDS,
+                       std::size(BITHUMB_EXCLUDE_KEYWORDS));
 }
 
 bool classify_listing_title_into(
@@ -1890,7 +2036,7 @@ public:
         buy_enabled_(getenv_truthy("BYBIT_SPOT_BUY_ENABLED", false)),
         timing_enabled_(getenv_truthy("LISTING_TDLIB_NATIVE_TIMING_ENABLED", false)),
         buy_quote_amount_(getenv_or("BYBIT_SPOT_BUY_USDT_AMOUNT", "0")),
-        buy_quote_amount_valid_(is_positive_decimal_text(buy_quote_amount_)),
+        buy_quote_amount_valid_(is_valid_quote_amount(buy_quote_amount_)),
         keepwarm_interval_sec_(
             getenv_int_or("LISTING_TDLIB_NATIVE_KEEPWARM_INTERVAL", 15)),
         symbol_refresh_interval_sec_(
@@ -3308,6 +3454,19 @@ private:
   std::vector<std::shared_ptr<const SpotSymbolSet>> spot_symbol_snapshots_;
 };
 
+// Derive the bare ticker from the order symbol (always "{TICKER}USDT" here) so
+// native trade events carry an explicit ticker. Python aligns multi-ticker
+// trade proofs by ticker; without it, alignment is positional and a divergent
+// extraction order could attach a proof to the wrong ticker. See [13].
+std::string ticker_from_symbol(const std::string& symbol) {
+  constexpr std::string_view quote = "USDT";
+  if (symbol.size() > quote.size() &&
+      symbol.compare(symbol.size() - quote.size(), quote.size(), quote) == 0) {
+    return symbol.substr(0, symbol.size() - quote.size());
+  }
+  return symbol;
+}
+
 std::string native_trade_json(const NativeTradeResult& trade) {
   const long long elapsed_ns = std::max(
       0LL,
@@ -3325,6 +3484,7 @@ std::string native_trade_json(const NativeTradeResult& trade) {
   out += trade.executed ? "true" : "false";
   out += ",\"ret_code\":" + std::to_string(trade.ret_code);
   out += ",\"symbol\":\"" + json_escape(trade.symbol) + "\"";
+  out += ",\"ticker\":\"" + json_escape(ticker_from_symbol(trade.symbol)) + "\"";
   out += ",\"order_id\":\"" + json_escape(trade.order_id) + "\"";
   out += ",\"order_link_id\":\"" + json_escape(trade.order_link_id) + "\"";
   out += ",\"transport\":\"" + json_escape(trade.transport) + "\"";
@@ -3370,6 +3530,8 @@ void write_native_trade_json(std::ostream& out, const NativeTradeResult& trade) 
       << ",\"ret_code\":" << trade.ret_code
       << ",\"symbol\":";
   write_json_string(out, trade.symbol);
+  out << ",\"ticker\":";
+  write_json_string(out, ticker_from_symbol(trade.symbol));
   out << ",\"order_id\":";
   write_json_string(out, trade.order_id);
   out << ",\"order_link_id\":";
@@ -3397,6 +3559,8 @@ void write_native_trade_event_json(std::ostream& out, const NativeTradeResult& t
       << ",\"ret_code\":" << trade.ret_code
       << ",\"symbol\":";
   write_json_string(out, trade.symbol);
+  out << ",\"ticker\":";
+  write_json_string(out, ticker_from_symbol(trade.symbol));
   out << ",\"order_id\":";
   write_json_string(out, trade.order_id);
   out << ",\"order_link_id\":";
@@ -5946,7 +6110,7 @@ int run_classify_title_cli(std::string_view exchange_name, std::string_view titl
   out << ",\"tickers\":";
   write_tickers_json(out, listing.tickers);
   out << ",\"asset_name\":";
-  write_json_string(out, extract_asset_name_view(title));
+  write_json_string(out, extract_asset_name_for_ticker(title, listing.ticker));
   out << ",\"markets\":" << market_flags_json(extract_market_flags(title))
       << "}" << std::endl;
   return 0;

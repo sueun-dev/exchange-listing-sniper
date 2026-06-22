@@ -232,6 +232,12 @@ class _TdlibEvent:
         self.payload = payload
 
 
+# Sentinel pushed onto the async queue when the relay's stdout closes (process
+# died) so an async waiter wakes immediately instead of blocking until its
+# (possibly hour-long) timeout.
+_RELAY_EXITED = object()
+
+
 class _TdlibRelay:
     def __init__(self, relay_path: Path):
         self.relay_path = relay_path
@@ -242,6 +248,7 @@ class _TdlibRelay:
         self._reader: threading.Thread | None = None
         self._async_loop: asyncio.AbstractEventLoop | None = None
         self._async_queue: asyncio.Queue[_TdlibEvent] | None = None
+        self._relay_exited = False
 
     def start(self):
         if not self.relay_path.exists():
@@ -263,6 +270,21 @@ class _TdlibRelay:
         self._reader.start()
 
     def _read_stdout(self):
+        assert self.proc is not None
+        assert self.proc.stdout is not None
+        try:
+            self._consume_stdout()
+        finally:
+            # stdout closed -> relay process exited. Wake any async waiter so it
+            # fails fast instead of blocking until its (up to 1-hour) timeout.
+            self._relay_exited = True
+            if self._async_loop is not None and self._async_queue is not None:
+                self._async_loop.call_soon_threadsafe(
+                    self._async_queue.put_nowait,
+                    _RELAY_EXITED,
+                )
+
+    def _consume_stdout(self):
         assert self.proc is not None
         assert self.proc.stdout is not None
         for raw_line in self.proc.stdout:
@@ -353,6 +375,11 @@ class _TdlibRelay:
             raise RuntimeError("TDLib relay async queue not attached")
         while True:
             event = await asyncio.wait_for(self._async_queue.get(), timeout=timeout)
+            if event is _RELAY_EXITED:
+                returncode = self.proc.poll() if self.proc is not None else None
+                raise RuntimeError(
+                    f"TDLib relay process exited (returncode={returncode})"
+                )
             if predicate(event):
                 return event
 

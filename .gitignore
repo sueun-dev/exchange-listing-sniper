@@ -4,9 +4,21 @@ vendor/
 .pycache-compile/
 __pycache__/
 *.pyc
+.ruff_cache/
+.codeatlas/
+
+# Secrets — never commit. .env.example (template) stays tracked.
 .env
+.env.bak*
+.env.local
+*.session
+
 data/
 bin/*.dylib
 bin/*.so
+# Compiled native binaries (platform-specific; rebuilt via cpp/*.sh + bin/build_*.sh).
+bin/tdlib_json_relay
+bin/bybit_fast_path
+bin/bybit_ws_trade_path
 rust/listing_classifier/target/
 cpp/**/build/

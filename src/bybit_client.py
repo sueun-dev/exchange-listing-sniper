@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 BYBIT_INSTRUMENTS_ENDPOINT = "https://api.bybit.com/v5/market/instruments-info"
 BYBIT_TICKERS_ENDPOINT = "https://api.bybit.com/v5/market/tickers"
+BYBIT_SERVER_TIME_ENDPOINT = "https://api.bybit.com/v5/market/time"
 REQUEST_TIMEOUT = 10
 DEFAULT_CACHE_TTL = 300
 
@@ -47,6 +48,35 @@ class BybitClient:
             "cache_ready": self.is_cache_ready(),
             "cache_age_ms": self.cache_age_ms(),
         }
+
+    def server_time_ms(self) -> float | None:
+        """Bybit server time in ms, or None on failure (for runtime clock checks)."""
+        try:
+            response = self._http.get(BYBIT_SERVER_TIME_ENDPOINT)
+            response.raise_for_status()
+            payload = response.json()
+        except Exception as exc:  # pragma: no cover - network safeguard
+            logger.debug("Bybit 서버 시각 조회 실패: %s", exc)
+            return None
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if isinstance(result, dict):
+            nano = result.get("timeNano")
+            if nano is not None:
+                try:
+                    return int(str(nano)) / 1_000_000.0
+                except (TypeError, ValueError):
+                    pass
+            second = result.get("timeSecond")
+            if second is not None:
+                try:
+                    return int(str(second)) * 1000.0
+                except (TypeError, ValueError):
+                    pass
+        top = payload.get("time") if isinstance(payload, dict) else None
+        try:
+            return float(top) if top is not None else None
+        except (TypeError, ValueError):
+            return None
 
     def has_symbol(self, category: str, symbol: str) -> bool:
         self.refresh_market_cache()

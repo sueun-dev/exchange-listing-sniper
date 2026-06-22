@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import io
 import sys
 from pathlib import Path
@@ -50,6 +51,20 @@ def test_measure_clock_offset_returns_sample_when_relay_answers():
     relay.clock_queue = _OneClockQueue(1_000_000)
 
     assert isinstance(relay.measure_clock_offset_ns(attempts=1), int)
+
+
+def test_async_wait_for_fails_fast_when_relay_process_exits():
+    relay = _TdlibRelay(MODULE_DIR / "bin" / "tdlib_json_relay")
+    relay.proc = SimpleNamespace(poll=lambda: 1)
+
+    async def scenario():
+        relay._async_queue = asyncio.Queue()
+        # Simulate the reader thread observing stdout close (relay died).
+        relay._async_queue.put_nowait(tdlib_module._RELAY_EXITED)
+        with pytest.raises(RuntimeError, match="relay process exited"):
+            await relay.async_wait_for(lambda _event: True, timeout=5)
+
+    asyncio.run(scenario())
 
 
 def test_tdlib_relay_env_merges_bybit_settings_from_env_loader(monkeypatch):

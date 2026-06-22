@@ -4,12 +4,21 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
+import time
 from collections import OrderedDict
 
 from .tdlib_realtime_client import TdlibRealtimeChannelClient
 from .telegram_realtime_client import RealtimeTelegramChannelClient
 
 logger = logging.getLogger(__name__)
+
+# Auto-reconnect backoff for a dropped backend. A backend that stays up longer
+# than the stable-reset window is treated as a transient blip and reconnects
+# from the initial (fast) delay; a persistently failing one backs off up to max.
+RECONNECT_INITIAL_BACKOFF_SEC = 1.0
+RECONNECT_MAX_BACKOFF_SEC = 30.0
+RECONNECT_STABLE_RESET_SEC = 60.0
 
 # Lazy import: Pyrogram may not be installed on all environments.
 _pyrogram_client_class = None
@@ -69,6 +78,10 @@ class RaceRealtimeChannelClient:
         self.telethon = telethon_client or RealtimeTelegramChannelClient()
         self.tdlib = tdlib_client or TdlibRealtimeChannelClient()
         self._gate = _FirstArrivalGate(max_entries=gate_max_entries)
+        # Reconnect tuning (overridable in tests).
+        self._reconnect_initial_sec = RECONNECT_INITIAL_BACKOFF_SEC
+        self._reconnect_max_sec = RECONNECT_MAX_BACKOFF_SEC
+        self._reconnect_stable_reset_sec = RECONNECT_STABLE_RESET_SEC
 
         # Auto-create Pyrogram client only when not explicitly passed
         if pyrogram_client is not self._UNSET:
@@ -142,20 +155,38 @@ class RaceRealtimeChannelClient:
             return maybe_result
 
         async def _run_backend(name: str, client):
-            try:
-                await client.run(
-                    channel_handles=channel_handles,
-                    on_post=_first_wins,
-                    minimal_post=minimal_post,
-                    trade_post=trade_post,
-                )
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                if name in required_backend_names:
-                    logger.error("%s required realtime backend dropped out: %s", name, exc)
+            # Supervisor loop: keep the backend connected. A drop (exception OR a
+            # clean return from run()) triggers an automatic reconnect with
+            # exponential backoff + jitter, so a transient network blip or a
+            # relay restart never permanently removes a receiver. Only an
+            # explicit cancellation (shutdown) ends the loop.
+            backoff = self._reconnect_initial_sec
+            while True:
+                started = time.monotonic()
+                try:
+                    await client.run(
+                        channel_handles=channel_handles,
+                        on_post=_first_wins,
+                        minimal_post=minimal_post,
+                        trade_post=trade_post,
+                    )
+                    drop_reason = "stream ended"
+                except asyncio.CancelledError:
                     raise
-                logger.warning("%s realtime backend dropped out: %s", name, exc)
+                except Exception as exc:
+                    drop_reason = str(exc) or exc.__class__.__name__
+                if time.monotonic() - started >= self._reconnect_stable_reset_sec:
+                    backoff = self._reconnect_initial_sec
+                delay = backoff + random.uniform(0.0, backoff * 0.25)
+                emit = logger.error if name in required_backend_names else logger.warning
+                emit(
+                    "%s 백엔드 끊김(%s) — %.1fs 후 자동 재연결",
+                    name,
+                    drop_reason,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                backoff = min(backoff * 2.0, self._reconnect_max_sec)
 
         active_backends = self._session_ready_backends()
         if not active_backends:
@@ -187,6 +218,8 @@ class RaceRealtimeChannelClient:
         ]
 
         try:
+            # Each backend self-heals via its own reconnect loop, so this only
+            # returns when the run is cancelled (shutdown).
             await asyncio.gather(*tasks)
         finally:
             for task in tasks:

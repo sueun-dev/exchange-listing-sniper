@@ -186,5 +186,133 @@
     "exchange": "bithumb",
     "title": "[거래지원종료] 하이스트리트(HIGH) 거래지원 종료",
     "expected": null
+  },
+  {
+    "id": "bithumb_year_parenthetical_is_not_a_ticker",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 무언가(2024) 원화 마켓 추가",
+    "expected": null
+  },
+  {
+    "id": "upbit_year_then_real_ticker",
+    "exchange": "upbit",
+    "title": "[거래] 무언가(2024)(REAL) KRW 마켓 디지털 자산 추가",
+    "expected": {
+      "signal_type": "new_listing",
+      "ticker": "REAL",
+      "tickers": ["REAL"],
+      "asset_name": "무언가(2024)",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "REAL", "asset_name": "무언가(2024)"}]
+    }
+  },
+  {
+    "id": "bithumb_standalone_parenthetical_without_name_is_dropped",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 월드(WLFI)(M) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "WLFI",
+      "tickers": ["WLFI"],
+      "asset_name": "월드",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "WLFI", "asset_name": "월드"}]
+    }
+  },
+  {
+    "id": "bithumb_spaced_ticker_parenthetical",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 시트레아( CTR ) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "CTR",
+      "tickers": ["CTR"],
+      "asset_name": "시트레아",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "CTR", "asset_name": "시트레아"}]
+    }
+  },
+  {
+    "id": "upbit_exclude_keyword_in_asset_name_still_lists",
+    "exchange": "upbit",
+    "title": "[거래] 이벤트체인(EVENT) KRW 마켓 디지털 자산 추가",
+    "expected": {
+      "signal_type": "new_listing",
+      "ticker": "EVENT",
+      "tickers": ["EVENT"],
+      "asset_name": "이벤트체인",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "EVENT", "asset_name": "이벤트체인"}]
+    }
+  },
+  {
+    "id": "bithumb_exclude_keyword_in_asset_name_still_lists",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 종료코인(END) 원화 마켓 추가",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "END",
+      "tickers": ["END"],
+      "asset_name": "종료코인",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "END", "asset_name": "종료코인"}]
+    }
+  },
+  {
+    "id": "bithumb_exclude_keyword_in_tail_still_rejected",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 무언가(ABC) 원화 마켓 추가 입출금 안내",
+    "expected": null
+  },
+  {
+    "id": "upbit_new_listing_with_trailing_schedule_parenthetical",
+    "exchange": "upbit",
+    "title": "[거래] 월드(WLFI) 신규 거래지원 안내 (KRW 마켓) (입금 9시, 거래 10시)",
+    "expected": {
+      "signal_type": "new_listing",
+      "ticker": "WLFI",
+      "tickers": ["WLFI"],
+      "asset_name": "월드",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "WLFI", "asset_name": "월드"}]
+    }
+  },
+  {
+    "id": "upbit_market_add_with_trailing_schedule_parenthetical",
+    "exchange": "upbit",
+    "title": "[거래] 바빌론(BABY) KRW 마켓 디지털 자산 추가 (거래 10시)",
+    "expected": {
+      "signal_type": "new_listing",
+      "ticker": "BABY",
+      "tickers": ["BABY"],
+      "asset_name": "바빌론",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "BABY", "asset_name": "바빌론"}]
+    }
+  },
+  {
+    "id": "upbit_exclude_keyword_in_trailing_parenthetical_rejected",
+    "exchange": "upbit",
+    "title": "[거래] 월드(WLFI) 신규 거래지원 안내 (KRW 마켓) (스테이킹 이벤트)",
+    "expected": null
+  },
+  {
+    "id": "bithumb_symbol_rename_market_add_is_actionable",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 젠신(AI) 원화 마켓 추가(심볼명 변경)",
+    "expected": {
+      "signal_type": "market_add",
+      "ticker": "AI",
+      "tickers": ["AI"],
+      "asset_name": "젠신",
+      "markets": ["KRW"],
+      "assets": [{"ticker": "AI", "asset_name": "젠신"}]
+    }
+  },
+  {
+    "id": "bithumb_network_change_suffix_still_rejected",
+    "exchange": "bithumb",
+    "title": "[마켓 추가] 싸이식(CYS) 원화 마켓 추가 (지원 네트워크 변경)",
+    "expected": null
   }
 ]

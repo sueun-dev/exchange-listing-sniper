@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -67,6 +69,205 @@ class FakeSignalEmitter:
 class DisabledUltraEngine:
     def is_enabled(self) -> bool:
         return False
+
+
+class _FakeRawResult:
+    def __init__(self, *, matched=True, duplicate=False, reason=b""):
+        self.matched = matched
+        self.duplicate = duplicate
+        self.reason = reason
+
+
+class FakeCppUltraEngine:
+    """In-process ultra engine stub that classifies AND 'buys' like the real one."""
+
+    def __init__(self, *, ticker="XYZ", payload_ticker=None, signal_type="market_add"):
+        self.enabled = True
+        self.raw_calls: list[int] = []
+        self._ticker = ticker
+        self._payload_ticker = payload_ticker or ticker
+        self._signal_type = signal_type
+
+    def is_enabled(self) -> bool:
+        return self.enabled
+
+    def warmup(self):
+        return {"ok": True}
+
+    def handle_post_raw(self, *, exchange, message_id, title):
+        self.raw_calls.append(message_id)
+        return _FakeRawResult(matched=True, duplicate=False)
+
+    def payload_from_raw(self, raw, *, exchange=None, message_id=None):
+        if raw is None or raw.duplicate or not raw.matched:
+            return None
+        trade = {
+            "ticker": self._payload_ticker,
+            "attempted": True,
+            "executed": True,
+            "order_link_id": f"ls-{exchange}-{message_id}-{self._payload_ticker}",
+            "reason": "native",
+        }
+        return {
+            "duplicate": False,
+            "matched": True,
+            "signal_type": self._signal_type,
+            "ticker": self._payload_ticker,
+            "tickers": [self._payload_ticker],
+            "asset_name": "자산",
+            "markets": ["KRW"],
+            "trade": trade,
+            "trades": [trade],
+        }
+
+
+def make_fire_fast_poller(tmp_path, engine, emitter):
+    poller = ExchangeListingPoller(
+        state_store=StateStore(tmp_path / "state.json"),
+        bybit_client=FakeBybitClient(),
+        spot_buyer=FakeSpotBuyer(),
+        signal_emitter=emitter,
+        cpp_ultra_engine=engine,
+        enable_bybit_warmup=False,
+        enable_channel_client=False,
+        enable_cpp_ultra_warmup=True,
+        defer_post_trade_work=True,
+        emit_ultra_ack=False,
+    )
+    # Run deferred finalize inline so the assertions are deterministic.
+    if poller._bg_executor is not None:
+        poller._bg_executor.shutdown(wait=True)
+    poller._bg_executor = None
+    return poller
+
+
+def _bithumb_post(message_id: int, title: str) -> dict:
+    return {
+        "channel_handle": "BithumbExchange",
+        "message_id": message_id,
+        "published_at": "2026-06-11T13:00:00+00:00",
+        "title": title,
+        "text": title,
+        "post_url": f"https://t.me/BithumbExchange/{message_id}",
+    }
+
+
+def test_cpp_ultra_fire_fast_skips_engine_when_ticker_already_bought(tmp_path):
+    engine = FakeCppUltraEngine(ticker="XYZ")
+    emitter = FakeSignalEmitter()
+    poller = make_fire_fast_poller(tmp_path, engine, emitter)
+    assert poller._cpp_ultra_hot_path_enabled
+    poller.state_store.mark_listing_seen("bithumb", "XYZ", 5000)
+
+    result = poller.process_post(
+        "bithumb",
+        _bithumb_post(5002, "[마켓 추가] 엑스코인(XYZ) 원화 마켓 추가 (거래 오픈 5시)"),
+    )
+
+    assert result is None
+    assert engine.raw_calls == []  # engine never fired -> no second buy
+    assert emitter.persisted == []
+
+
+def test_cpp_ultra_fire_fast_buys_repost_ticker_only_once(tmp_path):
+    engine = FakeCppUltraEngine(ticker="XYZ")
+    emitter = FakeSignalEmitter()
+    poller = make_fire_fast_poller(tmp_path, engine, emitter)
+
+    poller.process_post(
+        "bithumb",
+        _bithumb_post(5001, "[마켓 추가] 엑스코인(XYZ) 원화 마켓 추가"),
+    )
+    # Title-augmented re-post with a NEW message_id, same ticker.
+    poller.process_post(
+        "bithumb",
+        _bithumb_post(5002, "[마켓 추가] 엑스코인(XYZ) 원화 마켓 추가 (거래 오픈 5시)"),
+    )
+
+    assert engine.raw_calls == [5001]  # second re-post never fires the engine
+    assert [item["ticker"] for item in emitter.persisted] == ["XYZ"]
+
+
+def test_cpp_ultra_fire_fast_finalize_gate_blocks_duplicate_ticker(tmp_path):
+    # Pre-check sees AAA (not bought), but the engine authoritatively matches
+    # XYZ which was already bought -> finalize must skip (no duplicate proof).
+    engine = FakeCppUltraEngine(ticker="AAA", payload_ticker="XYZ")
+    emitter = FakeSignalEmitter()
+    poller = make_fire_fast_poller(tmp_path, engine, emitter)
+    poller.state_store.mark_listing_seen("bithumb", "XYZ", 5000)
+
+    result = poller.process_post(
+        "bithumb",
+        _bithumb_post(5003, "[마켓 추가] 에이코인(AAA) 원화 마켓 추가"),
+    )
+
+    assert result is None
+    assert engine.raw_calls == [5003]
+    assert emitter.persisted == []
+    assert emitter.trade_proofs == []
+
+
+class _LegacyStateStoreWithoutCanMarkSeen:
+    """Duck-typed store that exposes the seen-id snapshot but not can_mark_seen."""
+
+    def __init__(self):
+        self._seen = {"bithumb": [200]}
+
+    def snapshot_last_seen(self):
+        return {"bithumb": 200}
+
+    def snapshot_seen_message_ids(self):
+        return {channel: list(ids) for channel, ids in self._seen.items()}
+
+    def mark_seen(self, channel_id, message_id, persist=True):
+        self._seen.setdefault(channel_id, []).append(int(message_id))
+        return True
+
+
+def test_keep_warm_clock_skew_logs_warning(tmp_path, caplog):
+    class SkewedClient(FakeBybitClient):
+        def server_time_ms(self):
+            return time.time() * 1000.0 + 10_000.0  # local clock 10s ahead
+
+    poller = make_poller(tmp_path, FakeSpotBuyer(), FakeSignalEmitter())
+    poller.bybit_client = SkewedClient()
+
+    with caplog.at_level(logging.WARNING, logger="src.poller"):
+        poller._check_clock_skew()
+
+    assert any("시계" in record.message for record in caplog.records)
+
+
+def test_keep_warm_clock_skew_silent_when_in_sync(tmp_path, caplog):
+    class InSyncClient(FakeBybitClient):
+        def server_time_ms(self):
+            return time.time() * 1000.0  # aligned
+
+    poller = make_poller(tmp_path, FakeSpotBuyer(), FakeSignalEmitter())
+    poller.bybit_client = InSyncClient()
+
+    with caplog.at_level(logging.WARNING, logger="src.poller"):
+        poller._check_clock_skew()
+
+    assert not any("시계" in record.message for record in caplog.records)
+
+
+def test_would_mark_seen_fallback_allows_out_of_order_low_id(tmp_path):
+    poller = ExchangeListingPoller(
+        state_store=_LegacyStateStoreWithoutCanMarkSeen(),
+        bybit_client=FakeBybitClient(),
+        spot_buyer=FakeSpotBuyer(),
+        signal_emitter=FakeSignalEmitter(),
+        cpp_ultra_engine=DisabledUltraEngine(),
+        enable_bybit_warmup=False,
+        enable_channel_client=False,
+        enable_cpp_ultra_warmup=False,
+    )
+
+    # 199 < last_seen 200 but is NOT in the seen-id set -> must still be allowed.
+    assert poller._would_mark_seen("bithumb", 199) is True
+    # 200 was already processed -> rejected.
+    assert poller._would_mark_seen("bithumb", 200) is False
 
 
 def make_poller(tmp_path, buyer: FakeSpotBuyer, emitter: FakeSignalEmitter):

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 
 from .announcement_filter import (
     extract_listing_assets,
+    extract_primary_ticker,
     has_multiple_listing_assets_fast,
     make_listing_title_classifier,
 )
@@ -33,6 +34,11 @@ logger = logging.getLogger(__name__)
 
 CONFIG_FILE = Path(__file__).parent.parent / "config" / "channels.json"
 HOT_SEEN_MAX_ENTRIES_PER_CHANNEL = 8192
+# Warn if the local clock drifts this far from Bybit's server clock during a
+# long-running session. Bybit signs orders against recv_window (default 5000ms),
+# so sustained drift past this makes every buy fail auth at fire time. The
+# preflight clock gate only checks at startup; this re-checks on keep-warm.
+CLOCK_SKEW_WARN_MS = 2000.0
 
 BybitClient = None
 BybitSpotBuyer = None
@@ -590,21 +596,18 @@ class ExchangeListingPoller:
             return None
 
         title = post.get("title", "")
-        pre_listing = channel.classify_title_fast(title)
-        if pre_listing is not None and not self._has_multiple_tickers_fast(title):
-            ticker = str(pre_listing.get("ticker") or "").upper()
-            has_seen_listing = getattr(self.state_store, "has_seen_listing", None)
-            if ticker and callable(has_seen_listing) and has_seen_listing(channel_id, ticker):
-                logger.info(
-                    "[%s] C++ ultra 이전 중복 상장 티커 스킵: %s (message_id=%s)",
-                    channel_id,
-                    ticker,
-                    message_id,
-                )
-                self._remember_seen(channel_id, message_id)
-                if self.defer_persistence:
-                    self._mark_state_dirty()
-                return None
+        seen_ticker = self._title_ticker_already_seen(channel_id, title)
+        if seen_ticker is not None:
+            logger.info(
+                "[%s] C++ ultra 이전 중복 상장 티커 스킵: %s (message_id=%s)",
+                channel_id,
+                seen_ticker,
+                message_id,
+            )
+            self._remember_seen(channel_id, message_id)
+            if self.defer_persistence:
+                self._mark_state_dirty()
+            return None
         raw_result = self.cpp_ultra_engine.handle_post_raw(
             exchange=channel.exchange,
             message_id=message_id,
@@ -625,12 +628,18 @@ class ExchangeListingPoller:
             exchange=channel.exchange,
             message_id=message_id,
         )
-        if raw_payload is not None:
-            self._remember_listing_ticker(
-                channel_id=channel_id,
-                message_id=message_id,
-                ticker=str(raw_payload["ticker"]),
+        if raw_payload is not None and not self._remember_listing_ticker(
+            channel_id=channel_id,
+            message_id=message_id,
+            ticker=str(raw_payload["ticker"]),
+        ):
+            logger.info(
+                "[%s] C++ ultra 중복 상장 티커 finalize 스킵: %s (message_id=%s)",
+                channel_id,
+                raw_payload["ticker"],
+                message_id,
             )
+            return None
         self._submit_background(
             self._finalize_cpp_ultra_raw_post_trade_work,
             NOOP_LATENCY_TRACE,
@@ -677,21 +686,18 @@ class ExchangeListingPoller:
         if not self._would_mark_seen(channel_id, message_id):
             return None
         title = post.get("title", "")
-        pre_listing = channel.classify_title_fast(title)
-        if pre_listing is not None and not self._has_multiple_tickers_fast(title):
-            ticker = str(pre_listing.get("ticker") or "").upper()
-            has_seen_listing = getattr(self.state_store, "has_seen_listing", None)
-            if ticker and callable(has_seen_listing) and has_seen_listing(channel_id, ticker):
-                logger.info(
-                    "[%s] C++ ultra 이전 중복 상장 티커 스킵: %s (message_id=%s)",
-                    channel_id,
-                    ticker,
-                    message_id,
-                )
-                self._remember_seen(channel_id, message_id)
-                if self.defer_persistence:
-                    self._mark_state_dirty()
-                return None
+        seen_ticker = self._title_ticker_already_seen(channel_id, title)
+        if seen_ticker is not None:
+            logger.info(
+                "[%s] C++ ultra 이전 중복 상장 티커 스킵: %s (message_id=%s)",
+                channel_id,
+                seen_ticker,
+                message_id,
+            )
+            self._remember_seen(channel_id, message_id)
+            if self.defer_persistence:
+                self._mark_state_dirty()
+            return None
         measure_trade_timing = self.emit_ultra_ack or self.latency_trace_enabled
         trade_started_ns = time.monotonic_ns() if measure_trade_timing else 0
         if self.emit_ultra_ack:
@@ -720,12 +726,18 @@ class ExchangeListingPoller:
                 exchange=channel.exchange,
                 message_id=message_id,
             )
-            if raw_payload is not None:
-                self._remember_listing_ticker(
-                    channel_id=channel_id,
-                    message_id=message_id,
-                    ticker=str(raw_payload["ticker"]),
+            if raw_payload is not None and not self._remember_listing_ticker(
+                channel_id=channel_id,
+                message_id=message_id,
+                ticker=str(raw_payload["ticker"]),
+            ):
+                logger.info(
+                    "[%s] C++ ultra 중복 상장 티커 finalize 스킵: %s (message_id=%s)",
+                    channel_id,
+                    raw_payload["ticker"],
+                    message_id,
                 )
+                return None
             self._submit_background(
                 self._finalize_cpp_ultra_raw_post_trade_work,
                 trace,
@@ -741,11 +753,18 @@ class ExchangeListingPoller:
         self._remember_seen(channel_id, message_id)
         if self.defer_persistence:
             self._mark_state_dirty()
-        self._remember_listing_ticker(
+        if not self._remember_listing_ticker(
             channel_id=channel_id,
             message_id=message_id,
             ticker=str(result["ticker"]),
-        )
+        ):
+            logger.info(
+                "[%s] C++ ultra 중복 상장 티커 finalize 스킵: %s (message_id=%s)",
+                channel_id,
+                result["ticker"],
+                message_id,
+            )
+            return None
         listing = {
             "exchange": channel.exchange,
             "display_name": channel.display_name,
@@ -931,6 +950,27 @@ class ExchangeListingPoller:
     @staticmethod
     def _has_multiple_tickers_fast(title: str) -> bool:
         return has_multiple_listing_assets_fast(title)
+
+    def _title_ticker_already_seen(self, channel_id: str, title: str) -> str | None:
+        """Per-ticker dedup pre-check that does NOT depend on classifier parity.
+
+        Extracts the ticker straight from the title (same extractor used on
+        every path) rather than relying on the minimal classifier agreeing with
+        the authoritative C++ engine. For a single-ticker title whose ticker was
+        already bought this session, returns that ticker so the caller can skip
+        firing the C++ engine — closing the re-post double-buy when the minimal
+        Python classifier and the C++ classifier disagree.
+        """
+        if self._has_multiple_tickers_fast(title):
+            return None
+        has_seen_listing = getattr(self.state_store, "has_seen_listing", None)
+        if not callable(has_seen_listing):
+            return None
+        ticker = extract_primary_ticker(title)
+        if not ticker:
+            return None
+        ticker = str(ticker).upper()
+        return ticker if has_seen_listing(channel_id, ticker) else None
 
     @staticmethod
     def _attach_post_assets_to_listing(*, post: dict, listing: dict):
@@ -1608,7 +1648,27 @@ class ExchangeListingPoller:
         while not self._state_flush_stop.wait(self.state_flush_interval_sec):
             self._flush_state_if_dirty()
 
+    def _check_clock_skew(self):
+        client = self.bybit_client
+        server_time_fn = getattr(client, "server_time_ms", None)
+        if not callable(server_time_fn):
+            return
+        try:
+            server_ms = server_time_fn()
+        except Exception:  # pragma: no cover - keep-warm safeguard
+            return
+        if server_ms is None:
+            return
+        skew_ms = abs(time.time() * 1000.0 - server_ms)
+        if skew_ms > CLOCK_SKEW_WARN_MS:
+            logger.warning(
+                "로컬 시계가 Bybit 서버와 %.0fms 차이 — recv_window 초과 시 주문 인증 "
+                "실패 위험. NTP 동기화를 확인하세요.",
+                skew_ms,
+            )
+
     def _run_keep_warm_once(self):
+        self._check_clock_skew()
         if self.cpp_ultra_engine is not None and self.cpp_ultra_engine.is_enabled():
             try:
                 self.cpp_ultra_engine.warmup()
@@ -1666,8 +1726,17 @@ class ExchangeListingPoller:
             can_mark_seen = getattr(self.state_store, "can_mark_seen", None)
             if callable(can_mark_seen):
                 return can_mark_seen(channel_id, message_id)
+            # Defensive fallback for a duck-typed store without can_mark_seen:
+            # dedup on the seen-id set, NOT on last_seen. A bare last_seen floor
+            # would drop a lower-id listing that arrives after a higher-id
+            # non-listing — the exact out-of-order miss the seen-set prevents.
+            message_id = int(message_id)
+            seen_snapshot_fn = getattr(self.state_store, "snapshot_seen_message_ids", None)
+            if callable(seen_snapshot_fn):
+                seen = seen_snapshot_fn().get(channel_id, [])
+                return message_id not in {int(value) for value in seen}
             state = self.state_store.snapshot_last_seen()
-            return int(message_id) > int(state.get(channel_id, 0))
+            return message_id > int(state.get(channel_id, 0))
         message_id = int(message_id)
         if message_id <= int(self._hot_start_last_seen.get(channel_id, 0)):
             return False
@@ -1685,6 +1754,13 @@ class ExchangeListingPoller:
         self._remember_hot_seen(channel_id, message_id)
 
     def _remember_hot_seen(self, channel_id: str, message_id: int):
+        # SINGLE-WRITER INVARIANT: the read-modify-write below (max() then store,
+        # OrderedDict insert/move/popitem) and _mark_state_dirty's epoch bump are
+        # lock-free and correct ONLY because the hot path runs on exactly one
+        # thread — process_post is driven synchronously from the single asyncio
+        # event loop (race_realtime_client._first_wins calls on_post inline). Do
+        # NOT wrap on_post in run_in_executor/to_thread or add a second loop
+        # without adding a lock here, or dedup updates can be lost -> double-buys.
         message_id = int(message_id)
         self._hot_last_seen[channel_id] = max(
             int(self._hot_last_seen.get(channel_id, 0)),

@@ -9,7 +9,14 @@ import threading
 from pathlib import Path
 
 STATE_FILE = Path(__file__).parent.parent / "data" / "detected_listing_posts.json"
-MAX_SEEN_MESSAGE_IDS = 512
+# Recent-message-id window for in-run dedup. This is a bounded cache: once more
+# than this many higher ids arrive, the lowest fall out and a re-delivered old id
+# could pass the message-level check again. The authoritative money backstop
+# against a double-buy is the per-(channel, ticker) listing dedup
+# (seen_listing_tickers), which is intentionally NOT bounded — see
+# mark_listing_seen. Keep this window generously larger than any realistic
+# in-run reconnect/catch-up burst.
+MAX_SEEN_MESSAGE_IDS = 4096
 
 
 class StateStore:
@@ -89,6 +96,14 @@ class StateStore:
         message_id: int,
         persist: bool = True,
     ) -> bool:
+        # INTENTIONALLY UNBOUNDED: seen_listing_tickers is the authoritative
+        # money backstop against re-buying the same ticker (e.g. a Bithumb
+        # title-augmented re-post with a NEW message_id, which the bounded
+        # message-id window would not catch). Do NOT add an eviction cap here
+        # the way seen_message_ids is bounded — evicting a ticker would re-enable
+        # a real-money double-buy on a later re-announcement of that ticker.
+        # Distinct listings per process lifetime are far too few for unbounded
+        # growth to matter. See test_seen_listing_tickers_is_unbounded.
         key = ticker.upper()
         with self._lock:
             existing = self._payload_dict(self._state.get(channel_id, {}))

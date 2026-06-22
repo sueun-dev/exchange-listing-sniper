@@ -6,10 +6,11 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import time
 import urllib.error
 import urllib.parse
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import httpx
 
@@ -27,6 +28,12 @@ DEFAULT_TIMEOUT = 10
 DEFAULT_BUY_MODE = "quoteCoin"
 DEFAULT_ORDER_TRANSPORT_PREFERENCE = "cpp"
 DEFAULT_TIMESTAMP_BIAS_MS = -50
+# Hard ceiling on a single market buy. This is a money-safety backstop against a
+# fat-finger / misplaced-decimal / non-finite BYBIT_SPOT_BUY_USDT_AMOUNT: any
+# configured quote amount above it (or non-finite) refuses to send an order
+# instead of spending the value verbatim. Override with
+# BYBIT_SPOT_BUY_MAX_USDT_AMOUNT; the default is intentionally finite.
+DEFAULT_MAX_BUY_USDT_AMOUNT = 1000.0
 
 
 def _is_truthy(value: str | bool | None) -> bool:
@@ -91,6 +98,7 @@ class BybitSpotBuyer:
         base_url: str | None = None,
         buy_enabled: bool | None = None,
         buy_usdt_amount: float | None = None,
+        max_usdt_amount: float | None = None,
         recv_window: int | None = None,
         buy_mode: str | None = None,
         query_fill_after_buy: bool | None = None,
@@ -112,6 +120,7 @@ class BybitSpotBuyer:
                 "BYBIT_API_BASE_URL",
                 "BYBIT_SPOT_BUY_ENABLED",
                 "BYBIT_SPOT_BUY_USDT_AMOUNT",
+                "BYBIT_SPOT_BUY_MAX_USDT_AMOUNT",
                 "BYBIT_RECV_WINDOW",
                 "BYBIT_SPOT_BUY_MODE",
                 "BYBIT_QUERY_FILL_AFTER_BUY",
@@ -147,6 +156,16 @@ class BybitSpotBuyer:
             if buy_usdt_amount is None
             else float(buy_usdt_amount)
         )
+        self.max_usdt_amount = (
+            _to_float(
+                settings.get("BYBIT_SPOT_BUY_MAX_USDT_AMOUNT"),
+                DEFAULT_MAX_BUY_USDT_AMOUNT,
+            )
+            if max_usdt_amount is None
+            else float(max_usdt_amount)
+        )
+        if not math.isfinite(self.max_usdt_amount) or self.max_usdt_amount <= 0:
+            self.max_usdt_amount = DEFAULT_MAX_BUY_USDT_AMOUNT
         self.recv_window = int(
             recv_window
             or settings.get("BYBIT_RECV_WINDOW")
@@ -352,14 +371,16 @@ class BybitSpotBuyer:
             result["reason"] = "missing_api_config"
             return self._annotate_trade_timing(result, trade_started_ns)
 
+        # Validate the quote amount before any market lookup: a bad/over-ceiling
+        # amount is a config error, so fail fast and network-free.
+        if self._market_buy_qty <= 0:
+            result["reason"] = self._market_buy_reason
+            return self._annotate_trade_timing(result, trade_started_ns)
+
         # On fast transports we let the execution channel or Bybit validate the
         # symbol instead of blocking on a synchronous market cache refresh here.
         if not self._transport_order and not self._spot_symbol_available(symbol):
             result["reason"] = "spot_symbol_unavailable"
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        if self._market_buy_qty <= 0:
-            result["reason"] = self._market_buy_reason
             return self._annotate_trade_timing(result, trade_started_ns)
 
         for transport in self._transport_order:
@@ -613,11 +634,27 @@ class BybitSpotBuyer:
         except (TypeError, ValueError):
             return -1
 
+    @staticmethod
+    def _is_ambiguous_send_failure(reason: str) -> bool:
+        # A timeout means the request likely reached Bybit but the response was
+        # lost — the order may already be live. Re-sending the same order on the
+        # next transport could double-fill in the window before Bybit registers
+        # the (idempotent) orderLinkId, so a timeout must NOT trigger a fallback.
+        text = reason.lower()
+        return "timeout" in text or "timed out" in text or "time out" in text
+
     def _should_continue_transport_fallback(self, result: dict) -> bool:
         reason = str(result.get("reason", "")).lower()
         if "duplicate" in reason:
             return False
-        if reason in {"spot_symbol_unavailable", "missing_api_config", "quote_amount_invalid"}:
+        if self._is_ambiguous_send_failure(reason):
+            return False
+        if reason in {
+            "spot_symbol_unavailable",
+            "missing_api_config",
+            "quote_amount_invalid",
+            "quote_amount_exceeds_max",
+        }:
             return False
         return self._ret_code(result) == -1
 
@@ -799,17 +836,70 @@ class BybitSpotBuyer:
         return self._annotate_trade_timing(result, trade_started_ns)
 
     def _plan_market_buy(self) -> dict:
-        qty = Decimal(str(self.buy_usdt_amount))
+        # Money-safety gate: a non-finite, non-positive, or above-ceiling quote
+        # amount yields qty=0 so every buy path's `qty <= 0` guard refuses to
+        # send an order instead of spending the bad value verbatim.
+        invalid = {"qty": 0.0, "qty_str": "0", "reason": "quote_amount_invalid"}
+        raw = self.buy_usdt_amount
+        if raw is None or not math.isfinite(float(raw)) or float(raw) <= 0:
+            return invalid
+        try:
+            qty = Decimal(str(raw))
+        except (InvalidOperation, ValueError):
+            return invalid
         qty_float = float(qty)
-        reason = ""
-        if qty_float <= 0:
-            reason = "quote_amount_invalid"
-
+        if not math.isfinite(qty_float) or qty_float <= 0:
+            return invalid
+        if qty_float > self.max_usdt_amount:
+            logger.error(
+                "BYBIT_SPOT_BUY_USDT_AMOUNT=%s exceeds the safety ceiling %s — "
+                "refusing to buy. Raise BYBIT_SPOT_BUY_MAX_USDT_AMOUNT only if "
+                "this is intentional.",
+                qty_float,
+                self.max_usdt_amount,
+            )
+            return {
+                "qty": 0.0,
+                "qty_str": "0",
+                "reason": "quote_amount_exceeds_max",
+            }
         return {
             "qty": qty_float,
             "qty_str": _format_decimal(qty),
-            "reason": reason,
+            "reason": "",
         }
+
+    def query_spot_balance(self, coin: str) -> dict | None:
+        """Read-only signed wallet-balance lookup for one coin (no order)."""
+        query = urllib.parse.urlencode(
+            {"accountType": "UNIFIED", "coin": coin.upper()}
+        )
+        response = self._request_json(
+            method="GET",
+            path="/v5/account/wallet-balance",
+            query=query,
+            auth=True,
+        )
+        ret_code = int(response.get("retCode", -1))
+        if ret_code != 0:
+            return {
+                "ret_code": ret_code,
+                "ret_msg": response.get("retMsg", ""),
+                "available": None,
+            }
+        accounts = response.get("result", {}).get("list", [])
+        for account in accounts:
+            for entry in account.get("coin", []):
+                if str(entry.get("coin", "")).upper() == coin.upper():
+                    return {
+                        "ret_code": 0,
+                        "available": _to_float(
+                            entry.get("availableToWithdraw")
+                            or entry.get("walletBalance")
+                        ),
+                        "wallet": _to_float(entry.get("walletBalance")),
+                    }
+        return {"ret_code": 0, "available": 0.0, "wallet": 0.0}
 
     def query_order_fill(self, order_id: str) -> dict | None:
         if not order_id:

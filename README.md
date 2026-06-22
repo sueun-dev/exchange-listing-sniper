@@ -238,12 +238,10 @@ C++ relay 안에서는 watch chat 목록을 immutable raw-pointer snapshot으로
 
 `--memory-state` 는 dedup/state를 메모리 우선으로 처리하고, 디스크 flush는 뒤로 미룹니다. 실시간 핫패스에서는 `StateStore` 락과 파일 동기화를 건드리지 않고, close 또는 주기 flush 때만 상태 파일을 맞춥니다. 실행 중 dedup은 채널별 last-seen 하나가 아니라 exact message_id LRU를 쓰고, flush 때 최근 seen id 목록도 같이 저장합니다. 그래서 같은 실행 중 더 큰 message_id가 먼저 들어왔다는 이유만으로 아직 처리하지 않은 낮은 message_id 공지를 바로 버리지 않습니다. 재시작 후에는 저장된 `last_seen_message_id`를 replay floor로 사용해 과거 글 재처리를 막고, 저장된 최근 seen id 목록은 이미 처리한 최신 글의 중복 방지에 씁니다.
 
-로컬 벤치마크:
+로컬 벤치마크 (relay 내장 `--benchmark-*` self-test):
 
 ```bash
 cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
-.venv/bin/python bin/benchmark_latency.py --iterations 2000
-.venv/bin/python bin/benchmark_cpp_ultra_preflight.py --iterations 100000
 ./bin/tdlib_json_relay --benchmark-tdlib-message-disabled 20000
 ./bin/tdlib_json_relay --benchmark-tdlib-message-buy-preflight 20000
 ./bin/tdlib_json_relay --benchmark-tdlib-message-buy-preflight-upbit 20000
@@ -259,21 +257,7 @@ cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
 ./bin/tdlib_json_relay --benchmark-curl-header-list 20000
 ```
 
-현재 스크립트 출력 항목:
-
-- `build_post_full`: 실시간 full post 변환 비용
-- `build_post_trade`: ultra-buy용 title-only trade post 변환 비용
-- `build_post_minimal`: 실시간 minimal post 변환 비용
-- `python_classifier`: Python 제목 분류 비용
-- `race_gate_unique`: race backend가 처음 보는 `(channel, message_id)`를 채택하는 비용
-- `race_gate_duplicate`: race backend 중복 이벤트를 버리는 비용
-- `process_post_cpp_ultra_fire`: race winner post가 poller의 no-ack C++ ultra hot path로 들어가 seen mark와 C++ raw 호출, background handoff까지 끝내고 반환하는 비용
-- `process_post_tdlib_native_trade_skip`: TDLib native-buy가 이미 주문한 `listingMatched`를 Python poller가 다시 C++ ultra/fast buyer로 보내지 않고 state mark와 background handoff만 하고 반환하는 비용
-- `process_post_cpp_ultra_native_disabled`: 실제 `liblisting_ultra_engine` shared library를 호출하되 Bybit buy disabled 상태에서 C++ 분류/티커 추출/결과 반환까지 측정하는 비용
-- `cpp_ultra_order_preflight`: race winner가 C++ ultra engine에 들어온 뒤 제목 분류, 티커 추출, `orderLinkId`, 주문 body/auth, libcurl setopt까지 진행하고 실제 `curl_easy_perform` 직전에 멈추는 비용
-- `cpp_ultra_multi_order_preflight`: Telethon/Pyrogram winner의 복수 티커 공지를 C++ ultra engine이 Python bulk fallback 없이 worker pool로 처리하고 각 주문을 실제 `curl_easy_perform` 직전에 멈추는 비용
-
-수치는 머신 부하, Python 버전, native library 상태에 따라 달라지므로 README에 고정하지 않는다. 최신 수치는 위 명령으로 다시 뽑는다.
+수치는 머신 부하, Python 버전, native library 상태에 따라 달라지므로 README에 고정하지 않는다. 최신 수치는 위 relay `--benchmark-*` 명령으로 다시 뽑는다.
 
 `tdlib_json_relay --benchmark-tdlib-message-disabled` 는 TDLib `updateNewMessage` JSON이 C++ relay에 들어온 뒤 제목 분류, 티커 추출, native-buy disabled gate, `listingMatched` emit까지의 로컬 hot path를 반복 측정한다. 실제 Telegram publish 지연이나 Bybit 네트워크 주문 왕복은 포함하지 않는다.
 
@@ -302,7 +286,6 @@ cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
 ```bash
 cd /Users/sueuncho/Documents/01_Trading/02-exchange-listing-sniper
 bash ./bin/build_native_classifiers.sh
-.venv/bin/python ./bin/benchmark_native_classifier.py --iterations 100000 --skip-build
 ```
 
 - `LISTING_CLASSIFIER_BACKEND=cpp|rust|auto|python` 으로 강제 가능
@@ -313,8 +296,6 @@ bash ./bin/build_native_classifiers.sh
 - TDLib relay 내부 native classifier도 같은 fixture를 기준으로 검증합니다. `./bin/tdlib_json_relay --classify-title bithumb "[마켓 추가] 밈코어(M) 원화 마켓 추가"` 는 relay 내부 판정만 JSON으로 출력하고, `tests/test_tdlib_relay_process_inject.py` 가 이 CLI를 `tests/fixtures/listing_title_cases.json` 전체에 대해 실행합니다.
 - 실전 매수 시작 전에는 `bin/verify_listing_classifiers.py --require-tdlib-relay`가 Python 기준 classifier, 기본 `make_listing_title_classifier()` 경로, TDLib relay `--classify-title` 경로를 같은 golden fixture로 비교합니다. `run_tdlib_native_buy_realtime.sh`, `run_race_native_buy_realtime.sh`, `run_fast_buy_realtime.sh`, `run_fast_buy_cpp_realtime.sh`, `check_tdlib_native_buy_realtime.sh`는 relay auto-build 뒤 이 검사를 기본으로 실행하고 실패하면 감시를 시작하지 않습니다. 진단 목적으로만 `LISTING_CLASSIFIER_VERIFY=0`으로 끌 수 있습니다. `run_source_first_realtime.sh`는 분류/매수 없이 raw 소스 수신만 보는 모드라 이 classifier gate를 실행하지 않습니다.
 - relay가 emit한 `listingMatched.tickers`는 `src/tdlib_realtime_client.py`의 Python post 변환에서 `native_listing.tickers`로 보존되고, poller가 이를 티커별 주문/후처리로 확장합니다. `tests/test_tdlib_realtime_client.py` 와 `tests/test_poller_startup.py`가 이 경계를 고정합니다.
-
-`benchmark_native_classifier.py` 는 Python/C++/Rust 분류기를 같은 제목 세트로 비교한다. native winner를 `data/native_classifier_benchmark.json`에 저장하려면 `--write-cache`를 추가한다. `data/*`는 gitignore라 로컬 캐시로만 남는다.
 
 실제 Telegram ingest 비교:
 

@@ -63,6 +63,56 @@ def _is_word_boundary_char(char: str) -> bool:
     return not (char.isalnum() or char == "_")
 
 
+def _first_ticker_paren_open(title: str) -> int:
+    """Index of the '(' of the first ticker parenthetical after the bracket."""
+    bracket_idx = title.find("]")
+    search = 0 if bracket_idx < 0 else bracket_idx + 1
+    while True:
+        open_idx = title.find("(", search)
+        if open_idx < 0:
+            return -1
+        close_idx = title.find(")", open_idx + 1)
+        if close_idx < 0:
+            return -1
+        candidate = title[open_idx + 1 : close_idx].strip()
+        if _is_symbol_token(candidate) and candidate not in MARKET_CODES:
+            return open_idx
+        search = close_idx + 1
+
+
+def _exclude_scan_text(title: str) -> str:
+    """Title with the asset-name span blanked for exclude-keyword scanning.
+
+    Exclude keywords (입출금/종료/이벤트/유의...) describe the NOTICE TYPE and appear
+    in the structural prefix/tail — never as a reason to skip an asset whose own
+    Korean name merely contains those letters (e.g. 이벤트체인(EVENT)). Blanking the
+    name region between ']' and the first ticker '(' stops a genuine listing from
+    being dropped, while the bracket prefix and the tail after the ticker are
+    still scanned (so a real 종료/입출금 notice is still excluded).
+    """
+    bracket_idx = title.find("]")
+    if bracket_idx < 0:
+        return title
+    name_start = bracket_idx + 1
+    open_idx = _first_ticker_paren_open(title)
+    if open_idx < 0 or open_idx <= name_start:
+        return title
+    return title[:name_start] + (" " * (open_idx - name_start)) + title[open_idx:]
+
+
+def _remainder_is_only_parentheticals(text: str) -> bool:
+    """True when `text` is blank or only `(...)` groups (trailing scheduling info)."""
+    text = text.strip()
+    while text:
+        if not text.startswith("("):
+            return False
+        close = text.find(")")
+        if close < 0:
+            return False
+        text = text[close + 1 :].strip()
+    return True
+
+
 def _contains_token(title: str, token: str) -> bool:
     start = title.find(token)
     token_len = len(token)
@@ -77,8 +127,15 @@ def _contains_token(title: str, token: str) -> bool:
 
 
 def _is_symbol_token(value: str) -> bool:
-    return 1 <= len(value) <= 10 and value.isascii() and all(
-        char.isupper() or char.isdigit() for char in value
+    # A ticker is 1-10 ASCII chars of [A-Z0-9] with at least one letter. The
+    # letter requirement rejects all-digit parentheticals like a year (2024) or
+    # an amount, which would otherwise be mis-read as the ticker and buy the
+    # wrong symbol. Real tickers with digits (e.g. 2Z, B3) keep a letter.
+    return (
+        1 <= len(value) <= 10
+        and value.isascii()
+        and any(char.isupper() for char in value)
+        and all(char.isupper() or char.isdigit() for char in value)
     )
 
 
@@ -261,30 +318,38 @@ def _is_allowed_bithumb_market_add_suffix(suffix: str) -> bool:
         return True
     if "거래 오픈" in suffix or "거래 개시" in suffix:
         return True
+    # A symbol-rename re-announcement (e.g. 젠신(AIGENSYN)->AI) is a genuine
+    # tradeable 원화 마켓 추가, so treat the rename suffix as actionable.
+    if "심볼명 변경" in suffix or "심볼 변경" in suffix:
+        return True
     return suffix.startswith("및 ") and suffix.endswith(" 안내")
 
 
 def _is_upbit_listing(title: str) -> bool:
     if not title.startswith("[거래]"):
         return False
-    if any(keyword in title for keyword in UPBIT_EXCLUDE_KEYWORDS):
+    scan = _exclude_scan_text(title)
+    if any(keyword in scan for keyword in UPBIT_EXCLUDE_KEYWORDS):
         return False
     if "신규 거래지원 안내" in title:
         market_end = _find_market_parenthetical_end(
             title,
             start=title.find("신규 거래지원 안내"),
         )
-        return market_end is not None and not title[market_end:].strip()
-    return (
-        "마켓 디지털 자산 추가" in title
-        and title.strip().endswith("마켓 디지털 자산 추가")
-    )
+        return market_end is not None and _remainder_is_only_parentheticals(
+            title[market_end:]
+        )
+    marker = "마켓 디지털 자산 추가"
+    marker_idx = title.rfind(marker)
+    if marker_idx < 0:
+        return False
+    return _remainder_is_only_parentheticals(title[marker_idx + len(marker) :])
 
 
 def _is_bithumb_listing(title: str) -> bool:
     if not _has_bithumb_listing_prefix(title):
         return False
-    if any(keyword in title for keyword in BITHUMB_EXCLUDE_KEYWORDS):
+    if any(keyword in _exclude_scan_text(title) for keyword in BITHUMB_EXCLUDE_KEYWORDS):
         return False
     if "원화 마켓 재거래지원 안내" in title:
         return False

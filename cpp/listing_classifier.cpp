@@ -121,19 +121,25 @@ std::vector<std::string> extract_ticker_candidates(std::string_view title) {
         if (end == std::string_view::npos) {
             break;
         }
-        const auto candidate = title.substr(i + 1, end - i - 1);
+        // Trim spaces inside the parens so "( BABY )" matches "(BABY)" — keeps
+        // this classifier's verdict identical to the Python/ultra paths.
+        const std::string candidate = trim_ascii(std::string(title.substr(i + 1, end - i - 1)));
         if (candidate.empty() || candidate.size() > 10) {
             i = end;
             continue;
         }
         bool valid = true;
+        bool has_alpha = false;
         for (char ch : candidate) {
-            if (!(std::isupper(static_cast<unsigned char>(ch)) || std::isdigit(static_cast<unsigned char>(ch)))) {
+            if (std::isupper(static_cast<unsigned char>(ch))) {
+                has_alpha = true;
+            } else if (!std::isdigit(static_cast<unsigned char>(ch))) {
                 valid = false;
                 break;
             }
         }
-        if (valid) {
+        // Require a letter so an all-digit token (a year/amount) is not a ticker.
+        if (valid && has_alpha) {
             candidates.emplace_back(candidate);
         }
         i = end;
@@ -269,6 +275,71 @@ std::string extract_asset_name(std::string_view title) {
     return trim_ascii(std::string(title.substr(bracket + 1, open - bracket - 1)));
 }
 
+bool is_ticker_token(std::string_view candidate) {
+    if (candidate.empty() || candidate.size() > 10) {
+        return false;
+    }
+    bool has_alpha = false;
+    for (char ch : candidate) {
+        if (std::isupper(static_cast<unsigned char>(ch))) {
+            has_alpha = true;
+        } else if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    return has_alpha;
+}
+
+std::string normalize_asset_segment(std::string_view segment) {
+    std::string value = trim_ascii(std::string(segment));
+    while (!value.empty() && value.front() == ',') {
+        value.erase(value.begin());
+        value = trim_ascii(std::move(value));
+    }
+    constexpr std::string_view prefixes[] = {"및 ", "and ", "& ", "/ ", "· "};
+    for (const auto prefix : prefixes) {
+        if (value.rfind(prefix, 0) == 0) {
+            return trim_ascii(value.substr(prefix.size()));
+        }
+    }
+    return value;
+}
+
+// Ticker-aware asset name (matches Python _collect_asset_ticker_pairs and the
+// ultra engine): the asset name is the segment preceding the chosen ticker's
+// parenthetical, so a skipped leading parenthetical (e.g. a year) stays with
+// the name instead of shifting it. Keeps asset_name identical across paths.
+std::string extract_asset_name_for_ticker(std::string_view title, std::string_view ticker) {
+    const size_t bracket = title.find(']');
+    size_t name_start = bracket == std::string_view::npos ? 0 : bracket + 1;
+    size_t search = name_start;
+    while (search < title.size()) {
+        const size_t open = title.find('(', search);
+        if (open == std::string_view::npos) {
+            break;
+        }
+        const size_t close = title.find(')', open + 1);
+        if (close == std::string_view::npos) {
+            break;
+        }
+        const std::string candidate =
+            trim_ascii(std::string(title.substr(open + 1, close - open - 1)));
+        if (!is_market_code(candidate) && is_ticker_token(candidate)) {
+            if (std::string_view(candidate) == ticker) {
+                const std::string asset_name =
+                    normalize_asset_segment(title.substr(name_start, open - name_start));
+                if (!asset_name.empty()) {
+                    return asset_name;
+                }
+                break;
+            }
+            name_start = close + 1;
+        }
+        search = close + 1;
+    }
+    return extract_asset_name(title);
+}
+
 bool is_allowed_bithumb_market_add_suffix(std::string_view suffix) {
     const std::string trimmed = trim_ascii(std::string(suffix));
     if (trimmed.empty() ||
@@ -298,6 +369,11 @@ bool is_allowed_bithumb_market_add_suffix(std::string_view suffix) {
         trimmed.find("거래 개시") != std::string::npos) {
         return true;
     }
+    // A symbol-rename re-announcement is a genuine tradeable 원화 마켓 추가.
+    if (trimmed.find("심볼명 변경") != std::string::npos ||
+        trimmed.find("심볼 변경") != std::string::npos) {
+        return true;
+    }
     const std::string suffix_end = " 안내";
     return trimmed.rfind("및 ", 0) == 0 &&
            trimmed.size() >= suffix_end.size() &&
@@ -314,9 +390,72 @@ bool has_bithumb_listing_prefix(std::string_view title) {
             title.rfind("[마켓 추가/수수료 이벤트]", 0) == 0);
 }
 
+size_t first_ticker_paren_open(std::string_view title) {
+    const size_t bracket = title.find(']');
+    size_t search = bracket == std::string_view::npos ? 0 : bracket + 1;
+    while (true) {
+        const size_t open = title.find('(', search);
+        if (open == std::string_view::npos) {
+            return std::string_view::npos;
+        }
+        const size_t close = title.find(')', open + 1);
+        if (close == std::string_view::npos) {
+            return std::string_view::npos;
+        }
+        const std::string candidate =
+            trim_ascii(std::string(title.substr(open + 1, close - open - 1)));
+        if (!is_market_code(candidate) && is_ticker_token(candidate)) {
+            return open;
+        }
+        search = close + 1;
+    }
+}
+
+// Blank the asset-name span so exclude keywords inside the asset's own name do
+// not drop a genuine listing; the prefix and tail are still scanned. See [11].
+std::string exclude_scan_text(std::string_view title) {
+    const size_t bracket = title.find(']');
+    if (bracket == std::string_view::npos) {
+        return std::string(title);
+    }
+    const size_t name_start = bracket + 1;
+    const size_t open = first_ticker_paren_open(title);
+    if (open == std::string_view::npos || open <= name_start) {
+        return std::string(title);
+    }
+    std::string result(title.substr(0, name_start));
+    result.append(open - name_start, ' ');
+    result.append(title.substr(open));
+    return result;
+}
+
+bool remainder_is_only_parentheticals(std::string_view text) {
+    auto ltrim = [](std::string_view value) {
+        while (!value.empty() && is_ascii_space(static_cast<unsigned char>(value.front()))) {
+            value.remove_prefix(1);
+        }
+        return value;
+    };
+    text = ltrim(text);
+    while (!text.empty()) {
+        if (text.front() != '(') {
+            return false;
+        }
+        const size_t close = text.find(')');
+        if (close == std::string_view::npos) {
+            return false;
+        }
+        text = ltrim(text.substr(close + 1));
+    }
+    return true;
+}
+
 bool is_upbit_listing(std::string_view title) {
-    if (title.rfind("[거래]", 0) != 0 ||
-        !contains_none(title, UPBIT_EXCLUDE_KEYWORDS, std::size(UPBIT_EXCLUDE_KEYWORDS))) {
+    if (title.rfind("[거래]", 0) != 0) {
+        return false;
+    }
+    const std::string scan = exclude_scan_text(title);
+    if (!contains_none(scan, UPBIT_EXCLUDE_KEYWORDS, std::size(UPBIT_EXCLUDE_KEYWORDS))) {
         return false;
     }
     constexpr std::string_view new_listing_anchor = "신규 거래지원 안내";
@@ -326,19 +465,22 @@ bool is_upbit_listing(std::string_view title) {
             title.find(new_listing_anchor)
         );
         return market_end != std::string_view::npos &&
-               trim_ascii(std::string(title.substr(market_end))).empty();
+               remainder_is_only_parentheticals(title.substr(market_end));
     }
     constexpr std::string_view market_add_suffix = "마켓 디지털 자산 추가";
-    const std::string trimmed = trim_ascii(std::string(title));
-    const std::string suffix(market_add_suffix);
-    return title.find(market_add_suffix) != std::string_view::npos &&
-           trimmed.size() >= suffix.size() &&
-           trimmed.compare(trimmed.size() - suffix.size(), suffix.size(), suffix) == 0;
+    const size_t marker_idx = title.rfind(market_add_suffix);
+    if (marker_idx == std::string_view::npos) {
+        return false;
+    }
+    return remainder_is_only_parentheticals(
+        title.substr(marker_idx + market_add_suffix.size())
+    );
 }
 
 bool is_bithumb_listing(std::string_view title) {
     if (!has_bithumb_listing_prefix(title) ||
-        !contains_none(title, BITHUMB_EXCLUDE_KEYWORDS, std::size(BITHUMB_EXCLUDE_KEYWORDS)) ||
+        !contains_none(exclude_scan_text(title), BITHUMB_EXCLUDE_KEYWORDS,
+                       std::size(BITHUMB_EXCLUDE_KEYWORDS)) ||
         title.find("원화 마켓 재거래지원 안내") != std::string_view::npos) {
         return false;
     }
@@ -391,7 +533,7 @@ int classify_listing_impl(std::string_view exchange, std::string_view title, Nat
     out->matched = 1;
     out->market_flags = extract_market_flags(title);
     copy_to_buffer(ticker, out->ticker, sizeof(out->ticker));
-    copy_to_buffer(extract_asset_name(title), out->asset_name, sizeof(out->asset_name));
+    copy_to_buffer(extract_asset_name_for_ticker(title, ticker), out->asset_name, sizeof(out->asset_name));
     copy_to_buffer(signal_type, out->signal_type, sizeof(out->signal_type));
     return 1;
 }

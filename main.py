@@ -398,12 +398,23 @@ def main():
                 "minimal_post": args.source_only and not args.persist_source_events,
                 "trade_post": args.ultra_buy and not args.source_only,
             }
-            if args.realtime_backend == "race" and tdlib_native_buy_relay_active:
-                run_kwargs["required_backends"] = {"tdlib"}
-                run_kwargs["min_ready_backends"] = _env_int(
-                    "LISTING_RACE_MIN_READY_BACKENDS",
-                    2,
-                )
+            if args.realtime_backend == "race":
+                # Apply the readiness gate to EVERY race run, not only the
+                # native-buy race, so plain race also honors the configured
+                # minimum number of live session backends (default 1; native-buy
+                # requires tdlib + one more). Without this a flaky single backend
+                # was silently accepted as "race ready".
+                if tdlib_native_buy_relay_active:
+                    run_kwargs["required_backends"] = {"tdlib"}
+                    run_kwargs["min_ready_backends"] = _env_int(
+                        "LISTING_RACE_MIN_READY_BACKENDS",
+                        2,
+                    )
+                else:
+                    run_kwargs["min_ready_backends"] = _env_int(
+                        "LISTING_RACE_MIN_READY_BACKENDS",
+                        1,
+                    )
             asyncio.run(realtime_client.run(**run_kwargs))
             return
         if args.exchange:

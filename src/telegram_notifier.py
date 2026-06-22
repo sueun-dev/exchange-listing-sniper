@@ -20,16 +20,23 @@ def format_listing_signal(signal: dict) -> str:
     bybit_spot = "YES" if signal.get("bybit_spot") else "NO"
     bybit_perp = "YES" if signal.get("bybit_perp") else "NO"
     trade = signal.get("trade") or {}
+    reason = str(trade.get("reason", "") or "")
     if trade.get("executed"):
         auto_buy = (
             f"EXECUTED ({trade.get('requested_usdt', 0):.2f} USDT)"
             if isinstance(trade.get("requested_usdt"), (float, int))
             else "EXECUTED"
         )
+    elif trade.get("attempted") and "dispatch" in reason.lower():
+        # Async native dispatch returns before Bybit confirms the fill: the order
+        # was SENT but the outcome is unknown. Do NOT render this as FAILED — that
+        # misled the operator into re-buying an order that likely filled. Surface
+        # it as a distinct "sent, verify fill" state instead. See [2].
+        auto_buy = f"DISPATCHED ({reason}) — 체결 확인 필요"
     elif trade.get("attempted"):
-        auto_buy = f"FAILED ({trade.get('reason', 'unknown')})"
+        auto_buy = f"FAILED ({reason or 'unknown'})"
     else:
-        auto_buy = f"SKIP ({trade.get('reason', 'disabled')})"
+        auto_buy = f"SKIP ({reason or 'disabled'})"
 
     lines = [
         "🟢 <b>[상장 공지 감지]</b>",
