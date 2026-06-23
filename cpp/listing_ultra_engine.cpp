@@ -275,14 +275,6 @@ long long getenv_long_long_or(const char* key, long long fallback) {
     return parsed;
 }
 
-void append_int64(std::string& out, long long value) {
-    std::array<char, 32> buffer{};
-    auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-    if (ec == std::errc()) {
-        out.append(buffer.data(), static_cast<size_t>(ptr - buffer.data()));
-    }
-}
-
 std::string_view current_timestamp_ms(std::array<char, 32>& buffer, long long bias_ms) {
     const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now()
@@ -416,32 +408,6 @@ bool getenv_truthy(const char* key, bool fallback = false) {
         return static_cast<char>(std::tolower(ch));
     });
     return text == "1" || text == "true" || text == "yes" || text == "on";
-}
-
-std::string json_escape(const std::string& input) {
-    std::ostringstream escaped;
-    for (const char ch : input) {
-        switch (ch) {
-            case '\\':
-                escaped << "\\\\";
-                break;
-            case '"':
-                escaped << "\\\"";
-                break;
-            case '\n':
-                escaped << "\\n";
-                break;
-            case '\r':
-                escaped << "\\r";
-                break;
-            case '\t':
-                escaped << "\\t";
-                break;
-            default:
-                escaped << ch;
-        }
-    }
-    return escaped.str();
 }
 
 std::optional<std::string> extract_json_string(const std::string& body, const std::string& key) {
