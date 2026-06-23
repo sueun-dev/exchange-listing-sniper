@@ -11,7 +11,6 @@ import httpx
 logger = logging.getLogger(__name__)
 
 BYBIT_INSTRUMENTS_ENDPOINT = "https://api.bybit.com/v5/market/instruments-info"
-BYBIT_TICKERS_ENDPOINT = "https://api.bybit.com/v5/market/tickers"
 BYBIT_SERVER_TIME_ENDPOINT = "https://api.bybit.com/v5/market/time"
 REQUEST_TIMEOUT = 10
 DEFAULT_CACHE_TTL = 300
@@ -127,27 +126,6 @@ class BybitClient:
                 len(symbol_sets.get("linear", set())),
             )
 
-    def fetch_instrument_info(self, category: str, symbol: str) -> dict | None:
-        self.refresh_market_cache()
-        cached = self._instrument_cache.get(category, {}).get(symbol)
-        if cached is not None:
-            return cached
-
-        params = urllib.parse.urlencode({"category": category, "symbol": symbol})
-        body = self._fetch_json(f"{BYBIT_INSTRUMENTS_ENDPOINT}?{params}")
-        if body is None or body.get("retCode") != 0:
-            return None
-        items = body.get("result", {}).get("list", [])
-        return items[0] if items else None
-
-    def fetch_ticker(self, category: str, symbol: str) -> dict | None:
-        params = urllib.parse.urlencode({"category": category, "symbol": symbol})
-        body = self._fetch_json(f"{BYBIT_TICKERS_ENDPOINT}?{params}")
-        if body is None or body.get("retCode") != 0:
-            return None
-        items = body.get("result", {}).get("list", [])
-        return items[0] if items else None
-
     def _fetch_json(self, url: str) -> dict | None:
         try:
             response = self._http.get(url)
@@ -184,10 +162,3 @@ class BybitClient:
 
     def close(self):
         self._http.close()
-
-    @staticmethod
-    def _parse_lookup_response(body: dict) -> bool:
-        if body.get("retCode") != 0:
-            return False
-        result = body.get("result", {})
-        return bool(result.get("list"))
