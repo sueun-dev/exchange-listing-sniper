@@ -21,6 +21,24 @@ front-runs that move by buying on Bybit within milliseconds of the announcement.
 
 ---
 
+## Why this exists
+
+New-coin listings on Korea's dominant exchanges (Upbit, Bithumb) are among the most
+reliable short-term catalysts in crypto. Korean spot markets trade at a structural
+premium and are driven by concentrated retail flow, so when a Korean exchange
+announces a **new KRW market** for a coin that *already* trades on a global venue like
+Bybit, that announcement routinely triggers an immediate buy stampede — and the price
+on Bybit jumps within the same minute (quantified in the backtest below).
+
+The catalyst is public and the move is fast, so the only edge is **being early**:
+parsing the announcement and submitting the order before the crowd. That is an
+*engineering* problem, not a discretionary one — it reduces to (1) receiving the
+Telegram message with minimal latency, (2) deciding "is this an actionable KRW listing?"
+deterministically in microseconds, and (3) firing a correct, idempotent Bybit order,
+all before the candle moves. This repository is that machine: a microsecond-class
+detect-and-buy pipeline built to capture the few seconds of edge around each
+announcement, and validated end-to-end on real historical data.
+
 ## How it works
 
 ```
@@ -59,6 +77,66 @@ propagation to Bybit** (~tens of ms; co-locate near the matching engine to minim
   caution, suspension, delisting.
 - A coin is only bought if `{TICKER}USDT` actually exists on Bybit spot; otherwise it
   is skipped (no order, no loss).
+
+## Strategy validation — backtest on real data
+
+> **100% real data, zero estimation.** Announcement times are the *actual* message
+> timestamps from a live Telegram (MTProto) session; prices are Bybit's public V5
+> 1-minute kline (OHLC). No price or time is inferred or model-generated.
+
+**Question.** When Bithumb announces a new KRW listing for a coin already on Bybit,
+does Bybit actually pump — and by how much?
+
+**Method.** Over a 90-day window, every Bithumb `[마켓 추가] …원화 마켓 추가`
+announcement is taken at its exact Telegram timestamp. If `{TICKER}USDT` trades on
+Bybit spot, 1-minute OHLC bars are pulled from −5 to +10 minutes around it. Entry is
+the **open of the announcement minute** (a proxy for "buy at the instant of the
+announcement"); we measure the intra-window high (peak), low (worst dip), and the
++10-minute close.
+
+**Sample.** 21 Bithumb KRW listings in the window. 13 were *not* listed on Bybit and
+are excluded — the bot skips these (no order, no loss). The remaining **8 are the
+testable set.**
+
+| Ticker | Announce (UTC) | Entry | +0-bar close | Peak (≤+10m) | +10m close | Worst dip |
+| --- | --- | --- | --- | --- | --- | --- |
+| VVV | 2026-04-01 03:21 | 6.463 | +4.89% | **+7.18%** | +5.85% | −0.28% |
+| ZAMA | 2026-04-14 05:39 | 0.02752 | +8.79% | **+19.91%** | +12.17% | −0.04% |
+| BASED | 2026-04-21 05:23 | 0.13111 | +4.28% | **+25.41%** | +15.54% | −0.72% |
+| BLEND | 2026-04-29 03:24 | 0.22656 | +5.48% | **+9.85%** | +3.75% | −1.79% |
+| OPG | 2026-05-22 01:57 | 0.2491 | +18.75% | **+22.84%** | +15.94% | 0.00% |
+| BILL | 2026-05-28 05:16 | 0.08565 | +4.47% | **+7.20%** | +4.73% | −1.05% |
+| HNT | 2026-06-01 01:45 | 0.7207 | +12.06% | **+13.21%** | +8.48% | 0.00% |
+| SPX | 2026-06-16 02:22 | 0.3628 | +3.94% | **+4.85%** | +2.40% | 0.00% |
+
+**Aggregate (n = 8).**
+
+- **Win rate: 8/8 (100%)** positive on both the peak and the +10-minute close.
+- **Peak (≤+10m): mean +13.81%, median +11.53%, max +25.41%, min +4.85%.**
+- **+10-minute hold: mean +8.61%, median +7.16%.**
+- The pump lands *inside the announcement minute itself* — the +0-bar close is already
+  +4–19% — direct evidence that Korean flow lifts Bybit immediately, and **why latency
+  is the edge**: the faster you fill, the closer to the pre-pump entry.
+
+**Honest limitations — do not over-read this.**
+
+- **Small sample.** n = 8. 8/8 is a strong signal, not a guarantee; "sell-the-news",
+  non-pumping coins, and fakeouts *will* occur eventually.
+- **Entry is the pre-pump price.** The percentages are an *upper bound* relative to the
+  moment of announcement. Your real fill is somewhere inside the pump
+  (latency-dependent), so realized return < the table — which is exactly why a
+  co-located low-latency host matters.
+- **It is not monotonic.** 5 of 8 dipped intra-bar below entry at some point (worst
+  −1.79%). The edge is *asymmetric* — small downside, large upside — not "up only".
+- **No fees or slippage modeled.** A market order into a thin new-listing book pays real
+  slippage plus ~round-trip taker fees.
+- **No auto-sell.** The +8–14% is only realized if you exit near the peak; the bot buys
+  but does not sell, and gains partially give back by +10 minutes. Exit is on you.
+- **Past ≠ future.**
+
+The dataset (`data/bithumb_listing_backtest_90d.json`, local/gitignored) and the method
+above are reproducible from public Bybit kline plus the bot's own Telegram session — no
+proprietary feed required.
 
 ## Features
 
