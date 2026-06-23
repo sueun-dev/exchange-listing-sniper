@@ -138,6 +138,45 @@ The dataset (`data/bithumb_listing_backtest_90d.json`, local/gitignored) and the
 above are reproducible from public Bybit kline plus the bot's own Telegram session — no
 proprietary feed required.
 
+### Cross-check on Upbit — the edge is *conditional*
+
+The identical method run on **Upbit** (`@upbit_news`) over **180 days** tells a very
+different story — and clarifies what the edge actually is.
+
+| Market | Sample (tradable on Bybit) | Peak (≤+10m), mean | +10m hold, mean | +10m win rate |
+| --- | --- | --- | --- | --- |
+| **Bithumb** (90d) | 8 | **+13.81%** | **+8.61%** | 8/8 |
+| **Upbit** (180d) | 28 | +1.19% | +0.13% | 13/28 |
+
+Upbit KRW listings barely move Bybit: mean peak +1.19%, a statistically flat
++10-minute hold (+0.13%, 13/28 positive), no in-minute spike, and 27 of 28 dipped below
+entry intra-bar — i.e. **after fees and slippage, buying Upbit listings was a net loser
+in this sample.**
+
+Why the divergence? Four coins were listed on *both* exchanges, and the data is
+unambiguous:
+
+| Coin | Bithumb (first) | Bithumb peak | Upbit (later) | Upbit peak |
+| --- | --- | --- | --- | --- |
+| ZAMA | 04-14 05:39 | **+19.91%** | 04-14 16:48 | +0.75% |
+| BLEND | 04-29 03:24 | **+9.85%** | 04-29 11:23 | +2.09% |
+| VVV | 04-01 03:21 | **+7.18%** | 05-12 14:00 | +0.61% |
+| SPX | 06-16 02:22 | **+4.85%** | 06-16 11:12 | +0.16% |
+
+In every case Bithumb listed **first** and captured the pump; the later Upbit listing of
+the same coin was already priced in and stayed flat. The remaining 24 Upbit-only listings
+were dominated by already-established large caps (ICP, WIF, ETHFI, IO, USDE, TAO, …) that
+a Korean listing no longer moves.
+
+**Refined thesis.** The catalyst is not "a Korean listing" — it is **the _first_ Korean
+listing of a coin not yet globally priced in** (typically a smaller/newer coin, and in
+this window usually on Bithumb). A second Korean listing, or a listing of an already-liquid
+large cap, carries little to no edge. A bot that buys *every* Upbit and Bithumb listing
+therefore dilutes the real edge with break-even-to-negative trades; the natural
+refinements are to skip coins already listed on the other Korean exchange and to skip
+established large caps. **The honest takeaway: the strategy is real but selective —
+"snipe everything" is not the edge; "snipe the right listing, fast, and exit" is.**
+
 ## Features
 
 - **Correctness, proven across 5 implementations.** Python, the C++ classifier, the Rust
