@@ -1,5 +1,7 @@
 # Exchange Listing Sniper
 
+**English** · [한국어](README.ko.md)
+
 Low-latency bot that watches the official Telegram channels of Korean exchanges
 (**Upbit** `@upbit_news`, **Bithumb** `@BithumbExchange`), detects new KRW/원화
 spot-listing announcements the instant they post, and places an immediate Bybit
