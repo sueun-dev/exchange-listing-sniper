@@ -247,10 +247,6 @@ def _parse_listing_title_fields(title: str) -> tuple[str | None, str, list[str]]
     return ticker, asset_name, markets
 
 
-def extract_ticker_candidates(title: str) -> list[str]:
-    return _collect_parenthesized_tokens(title)
-
-
 def extract_listing_assets(title: str) -> list[dict[str, str]]:
     return _collect_asset_ticker_pairs(title)
 
@@ -279,21 +275,6 @@ def has_multiple_listing_assets_fast(title: str) -> bool:
 def extract_primary_ticker(title: str) -> str | None:
     ticker, _, _ = _parse_listing_title_fields(title)
     return ticker
-
-
-def extract_markets(title: str) -> list[str]:
-    _, _, markets = _parse_listing_title_fields(title)
-    return markets
-
-
-def extract_asset_name(title: str) -> str:
-    _, asset_name, _ = _parse_listing_title_fields(title)
-    return asset_name
-
-
-def has_krw_market(title: str) -> bool:
-    markets = extract_markets(title)
-    return "KRW" in markets
 
 
 def _has_upbit_krw_market(title: str) -> bool:
@@ -380,32 +361,6 @@ def _attach_listing_context(
             listing.setdefault("ticker", tickers[0])
             listing.setdefault("asset_name", assets[0]["asset_name"])
     return listing
-
-
-def classify_listing_post(post: dict, channel_config: dict) -> dict | None:
-    title = post.get("title", "")
-    exchange = channel_config["exchange"]
-    native_manager = get_native_classifier_manager()
-    native_backend = native_manager.get_backend()
-    if native_backend is not None:
-        try:
-            native_listing = native_backend.classify_dict(exchange, title)
-        except Exception:
-            native_listing = None
-        else:
-            if native_listing is not None:
-                return _attach_listing_context(
-                    native_listing,
-                    exchange=exchange,
-                    display_name=channel_config["display_name"],
-                    title=title,
-                )
-
-    return classify_listing_title_python(
-        exchange=exchange,
-        title=title,
-        display_name=channel_config["display_name"],
-    )
 
 
 def make_listing_title_classifier(
