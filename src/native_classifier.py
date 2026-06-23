@@ -233,15 +233,8 @@ class NativeClassifierManager:
         result = backend.classify(exchange, title)
         return None if result is None else result.to_dict()
 
-    def has_backend(self) -> bool:
-        return self._get_backend() is not None
-
     def available_backend_names(self) -> list[str]:
         return list(self._load_available_backends().keys())
-
-    def selected_backend_name(self) -> str | None:
-        backend = self._get_backend()
-        return backend.name if backend is not None else None
 
     def get_backend(self) -> NativeClassifierBackend | None:
         return self._get_backend()
