@@ -397,3 +397,67 @@ def test_transport_preference_partial_csv_appends_missing_transports():
     buyer = _buyer_with_preference("python_ws,")
 
     assert buyer._parse_transport_preference() == ("ws", "cpp", "cpp_ws")
+
+
+def _split_buyer(**kwargs) -> BybitSpotBuyer:
+    return _buyer(
+        api_key="key",
+        api_secret="secret",
+        buy_enabled=False,  # no network; result still carries the planned qty
+        buy_usdt_amount=200,
+        max_usdt_amount=200,
+        **kwargs,
+    )
+
+
+def test_budget_split_two_tickers_halves_each_order():
+    buyer = _split_buyer()
+    orders = [
+        {"ticker": "AAA", "order_link_id": "ls-a"},
+        {"ticker": "BBB", "order_link_id": "ls-b"},
+    ]
+
+    results = buyer.buy_markets(orders)
+
+    assert len(results) == 2
+    assert [r["qty"] for r in results] == [100.0, 100.0]
+    assert [r["requested_usdt"] for r in results] == [100.0, 100.0]
+    assert sum(r["qty"] for r in results) == 200.0
+    # the per-announcement scope must restore the configured amount afterward
+    assert buyer.buy_usdt_amount == 200.0
+    assert buyer._market_buy_qty == 200.0
+
+
+def test_budget_split_three_tickers_never_exceeds_budget():
+    buyer = _split_buyer()
+    orders = [
+        {"ticker": t, "order_link_id": f"ls-{t}"} for t in ("AAA", "BBB", "CCC")
+    ]
+
+    results = buyer.buy_markets(orders)
+
+    assert len(results) == 3
+    assert all(abs(r["qty"] - 66.6666) < 1e-9 for r in results)
+    assert sum(r["qty"] for r in results) <= 200.0
+
+
+def test_budget_split_single_ticker_keeps_full_amount():
+    buyer = _split_buyer()
+
+    bulk = buyer.buy_markets([{"ticker": "AAA", "order_link_id": "ls-a"}])
+    single = buyer.buy_market(ticker="AAA", order_link_id="ls-a")
+
+    assert bulk[0]["qty"] == 200.0
+    assert single["qty"] == 200.0
+
+
+def test_budget_split_disabled_spends_full_amount_per_ticker():
+    buyer = _split_buyer(split_across_tickers=False)
+    orders = [
+        {"ticker": "AAA", "order_link_id": "ls-a"},
+        {"ticker": "BBB", "order_link_id": "ls-b"},
+    ]
+
+    results = buyer.buy_markets(orders)
+
+    assert [r["qty"] for r in results] == [200.0, 200.0]

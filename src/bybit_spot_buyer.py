@@ -7,10 +7,12 @@ import hmac
 import json
 import logging
 import math
+import threading
 import time
 import urllib.error
 import urllib.parse
-from decimal import Decimal, InvalidOperation
+from contextlib import contextmanager
+from decimal import ROUND_DOWN, Decimal, InvalidOperation
 
 import httpx
 
@@ -108,6 +110,7 @@ class BybitSpotBuyer:
         prefer_cached_symbol_check: bool | None = None,
         order_transport_preference: str | None = None,
         resolve_duplicate_order_link_id: bool | None = None,
+        split_across_tickers: bool | None = None,
         require_fast_executor_warmup: bool | None = None,
         timestamp_bias_ms: int | None = None,
         timeout: int = DEFAULT_TIMEOUT,
@@ -131,6 +134,7 @@ class BybitSpotBuyer:
                 "BYBIT_PREFER_CACHED_SYMBOL_CHECK",
                 "BYBIT_ORDER_TRANSPORT_PREFERENCE",
                 "BYBIT_RESOLVE_DUPLICATE_ORDER_LINK_ID",
+                "BYBIT_SPOT_BUY_SPLIT_ACROSS_TICKERS",
                 "BYBIT_TIMESTAMP_BIAS_MS",
             }
         )
@@ -166,6 +170,16 @@ class BybitSpotBuyer:
         )
         if not math.isfinite(self.max_usdt_amount) or self.max_usdt_amount <= 0:
             self.max_usdt_amount = DEFAULT_MAX_BUY_USDT_AMOUNT
+        raw_split = settings.get("BYBIT_SPOT_BUY_SPLIT_ACROSS_TICKERS")
+        self.split_across_tickers = (
+            bool(split_across_tickers)
+            if split_across_tickers is not None
+            else (
+                True
+                if raw_split is None or str(raw_split).strip() == ""
+                else _is_truthy(raw_split)
+            )
+        )
         self.recv_window = int(
             recv_window
             or settings.get("BYBIT_RECV_WINDOW")
@@ -237,6 +251,7 @@ class BybitSpotBuyer:
         self._market_buy_qty = float(self._market_buy_plan["qty"])
         self._market_buy_qty_str = self._market_buy_plan["qty_str"]
         self._market_buy_reason = self._market_buy_plan["reason"]
+        self._amount_lock = threading.Lock()
         if self.cpp_ws_executor.is_enabled():
             try:
                 self.cpp_ws_executor.warmup()
@@ -341,6 +356,16 @@ class BybitSpotBuyer:
                     order_link_id=order["order_link_id"],
                 )
             ]
+        # Treat BYBIT_SPOT_BUY_USDT_AMOUNT as a per-ANNOUNCEMENT budget: when one
+        # announcement lists N tickers, split the budget equally so the total
+        # spent stays at the configured amount (amount/N each) instead of
+        # amount*N. ROUND_DOWN keeps the summed spend at or below budget.
+        if self.split_across_tickers:
+            with self._scoped_quote_amount(self._split_amount_per_order(len(orders))):
+                return self._dispatch_buy_markets(orders)
+        return self._dispatch_buy_markets(orders)
+
+    def _dispatch_buy_markets(self, orders: list[dict]) -> list[dict]:
         if self._transport_order == ("cpp",) and callable(
             getattr(self.fast_executor, "buy_markets_quote_text", None)
         ):
@@ -352,6 +377,41 @@ class BybitSpotBuyer:
             )
             for order in orders
         ]
+
+    def _split_amount_per_order(self, ticker_count: int) -> float:
+        if ticker_count <= 1:
+            return self.buy_usdt_amount
+        per = (
+            Decimal(str(self.buy_usdt_amount)) / Decimal(ticker_count)
+        ).quantize(Decimal("0.0001"), rounding=ROUND_DOWN)
+        return float(per)
+
+    @contextmanager
+    def _scoped_quote_amount(self, usdt_amount: float):
+        # Temporarily rebind the quote amount (and its derived qty plan) for a
+        # batch so every transport reads the split per-order amount. Held under a
+        # lock so a concurrent buy can never observe a half-swapped amount.
+        plan = self._plan_market_buy(usdt_amount)
+        with self._amount_lock:
+            saved = (
+                self.buy_usdt_amount,
+                self._market_buy_qty,
+                self._market_buy_qty_str,
+                self._market_buy_reason,
+            )
+            self.buy_usdt_amount = float(usdt_amount)
+            self._market_buy_qty = float(plan["qty"])
+            self._market_buy_qty_str = plan["qty_str"]
+            self._market_buy_reason = plan["reason"]
+            try:
+                yield
+            finally:
+                (
+                    self.buy_usdt_amount,
+                    self._market_buy_qty,
+                    self._market_buy_qty_str,
+                    self._market_buy_reason,
+                ) = saved
 
     def _buy_market_general(
         self,
@@ -835,12 +895,12 @@ class BybitSpotBuyer:
         result["executed"] = True
         return self._annotate_trade_timing(result, trade_started_ns)
 
-    def _plan_market_buy(self) -> dict:
+    def _plan_market_buy(self, usdt_amount: float | None = None) -> dict:
         # Money-safety gate: a non-finite, non-positive, or above-ceiling quote
         # amount yields qty=0 so every buy path's `qty <= 0` guard refuses to
         # send an order instead of spending the bad value verbatim.
         invalid = {"qty": 0.0, "qty_str": "0", "reason": "quote_amount_invalid"}
-        raw = self.buy_usdt_amount
+        raw = self.buy_usdt_amount if usdt_amount is None else usdt_amount
         if raw is None or not math.isfinite(float(raw)) or float(raw) <= 0:
             return invalid
         try:
