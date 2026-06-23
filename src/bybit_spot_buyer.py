@@ -55,17 +55,12 @@ BUY_MODE_ALIASES = {
     "basecoin": "baseCoin",
     "base": "baseCoin",
 }
-_MARKET_UNIT_ALIASES = BUY_MODE_ALIASES
 
 
 def _normalize_buy_mode(value: str | None) -> str:
     if not value:
         return DEFAULT_BUY_MODE
     return BUY_MODE_ALIASES.get(value.strip().lower(), value.strip())
-
-
-def _normalize_market_unit(value: str | None) -> str:
-    return _normalize_buy_mode(value)
 
 
 def _to_float(value: str | float | int | None, default: float = 0.0) -> float:
@@ -802,98 +797,6 @@ class BybitSpotBuyer:
         if self._transport_order == ("cpp",):
             return self._buy_market_cpp_only
         return self._buy_market_general
-
-    def sell_market_base_qty(
-        self,
-        *,
-        symbol: str,
-        base_qty: str,
-        order_link_id: str,
-    ) -> dict:
-        trade_started_ns = time.monotonic_ns()
-        result = {
-            "enabled": self.buy_enabled,
-            "attempted": False,
-            "executed": False,
-            "symbol": symbol,
-            "side": "Sell",
-            "order_type": "Market",
-            "market_unit": "baseCoin",
-            "requested_qty": base_qty,
-            "order_link_id": order_link_id,
-        }
-
-        if not self.buy_enabled:
-            result["reason"] = "buy_disabled"
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        if not self.is_configured():
-            result["reason"] = "missing_api_config"
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        if not self.market_client.has_symbol("spot", symbol):
-            result["reason"] = "spot_symbol_unavailable"
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        qty_text = str(base_qty).strip()
-        if not qty_text:
-            result["reason"] = "base_qty_missing"
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        if self.cpp_ws_executor.is_enabled():
-            cpp_ws_result = self.cpp_ws_executor.sell_market(
-                symbol=symbol,
-                qty=qty_text,
-                order_link_id=order_link_id,
-            )
-            result.update(cpp_ws_result)
-            if not result.get("executed"):
-                result["reason"] = result.get("reason", "cpp_ws_trade_failed")
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        if self.ws_executor.is_enabled():
-            ws_result = self.ws_executor.sell_market(
-                symbol=symbol,
-                qty=qty_text,
-                order_link_id=order_link_id,
-            )
-            result.update(ws_result)
-            if not result.get("executed"):
-                result["reason"] = result.get("reason", "ws_trade_failed")
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        result["attempted"] = True
-        result["transport"] = "rest_trade"
-        body = json.dumps(
-            {
-                "category": "spot",
-                "symbol": symbol,
-                "side": "Sell",
-                "orderType": "Market",
-                "qty": qty_text,
-                "orderFilter": "Order",
-                "marketUnit": "baseCoin",
-                "orderLinkId": order_link_id,
-            },
-            separators=(",", ":"),
-        )
-        response = self._request_json(
-            method="POST",
-            path="/v5/order/create",
-            body=body,
-            auth=True,
-        )
-
-        ret_code = int(response.get("retCode", -1))
-        ret_msg = response.get("retMsg", "")
-        result["ret_code"] = ret_code
-        if ret_code != 0:
-            result["reason"] = ret_msg or "order_create_failed"
-            return self._annotate_trade_timing(result, trade_started_ns)
-
-        result["order_id"] = response.get("result", {}).get("orderId") or ""
-        result["executed"] = True
-        return self._annotate_trade_timing(result, trade_started_ns)
 
     def _plan_market_buy(self, usdt_amount: float | None = None) -> dict:
         # Money-safety gate: a non-finite, non-positive, or above-ceiling quote
