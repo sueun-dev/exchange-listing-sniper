@@ -622,14 +622,6 @@ double getenv_nonnegative_double_or(const char* key, double fallback) {
   return parsed;
 }
 
-void append_int64(std::string& out, long long value) {
-  std::array<char, 32> buffer{};
-  auto [ptr, ec] = std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
-  if (ec == std::errc()) {
-    out.append(buffer.data(), static_cast<size_t>(ptr - buffer.data()));
-  }
-}
-
 std::string_view current_timestamp_ms(std::array<char, 32>& buffer, long long bias_ms) {
   const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(
       std::chrono::system_clock::now());
@@ -1267,26 +1259,6 @@ void extract_listing_tickers_into(std::string_view title, ListingTickers& ticker
     }
     search = end + 1;
   }
-}
-
-ListingTickers extract_listing_tickers(std::string_view title) {
-  ListingTickers tickers;
-  extract_listing_tickers_into(title, tickers);
-  return tickers;
-}
-
-std::string tickers_json(const ListingTickers& tickers) {
-  std::string result = "[";
-  for (size_t i = 0; i < tickers.count; ++i) {
-    if (i != 0) {
-      result += ",";
-    }
-    result += "\"";
-    result += json_escape(tickers.values[i]);
-    result += "\"";
-  }
-  result += "]";
-  return result;
 }
 
 void write_tickers_json(std::ostream& out, const ListingTickers& tickers) {
