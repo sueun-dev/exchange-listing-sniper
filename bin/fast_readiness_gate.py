@@ -609,7 +609,7 @@ def main() -> int:
         ),
         _step(
             "listing_classifier_fixture_check",
-            [python, "bin/verify_listing_classifiers.py", "--require-tdlib-relay"],
+            [python, "bin/verify_listing_classifiers.py", "--require-tdlib-relay", "--require-ultra-engine"],
             args.timeout,
             required=True,
         ),

@@ -92,6 +92,18 @@ struct NativeUltraResult {
     char reason[128];
 };
 
+// Classify-only result for the parity harness: the same title verdict the live
+// handle() path produces, but with no dedup/symbol-existence/order side effects.
+struct UltraClassifyResult {
+    int matched;
+    uint32_t market_flags;
+    int ticker_count;
+    char signal_type[16];
+    char ticker[16];
+    char asset_name[128];
+    char tickers[MAX_ULTRA_TICKERS][16];
+};
+
 struct NativeUltraTradeResult {
     int attempted;
     int executed;
@@ -1213,6 +1225,105 @@ private:
     bool order_header_list_applied_{false};
 };
 
+// Shared listing-title classifier: the single in-TU source of the match rules,
+// used by both ListingUltraEngine::handle (live buy path) and the
+// ultra_classify_title parity export, so the rules are not re-hardcoded twice.
+bool ultra_match_listing(std::uint64_t exchange_key, std::string_view title,
+                         std::string_view& signal_type_out) {
+    bool matched = false;
+    if (exchange_key == 1) {
+        if (title.rfind("[거래]", 0) == 0 &&
+            contains_none(exclude_scan_text(title), UPBIT_EXCLUDE_KEYWORDS,
+                          std::size(UPBIT_EXCLUDE_KEYWORDS)) &&
+            has_ascii_word(title, "KRW")) {
+            constexpr std::string_view new_listing_anchor = "신규 거래지원 안내";
+            if (title.find(new_listing_anchor) != std::string_view::npos) {
+                const size_t market_end = find_market_parenthetical_end(
+                    title, title.find(new_listing_anchor));
+                matched = market_end != std::string_view::npos &&
+                          remainder_is_only_parentheticals(title.substr(market_end));
+            } else {
+                constexpr std::string_view market_add_suffix = "마켓 디지털 자산 추가";
+                const size_t marker_idx = title.rfind(market_add_suffix);
+                matched = marker_idx != std::string_view::npos &&
+                          remainder_is_only_parentheticals(
+                              title.substr(marker_idx + market_add_suffix.size()));
+            }
+        }
+        signal_type_out = "new_listing";
+    } else {
+        if (has_bithumb_listing_prefix(title) &&
+            contains_none(exclude_scan_text(title), BITHUMB_EXCLUDE_KEYWORDS,
+                          std::size(BITHUMB_EXCLUDE_KEYWORDS)) &&
+            title.find("원화 마켓 재거래지원 안내") == std::string_view::npos) {
+            constexpr std::string_view marker = "원화 마켓 추가";
+            const size_t marker_pos = title.find(marker);
+            matched = marker_pos != std::string_view::npos &&
+                      is_allowed_bithumb_market_add_suffix(
+                          title.substr(marker_pos + marker.size()));
+        }
+        signal_type_out = "market_add";
+    }
+    return matched;
+}
+
+// Classify-only path for the parity harness (no dedup, no symbol-existence gate,
+// no order). Fills out with the same verdict handle() would compute.
+int ultra_classify_into(std::string_view exchange, std::string_view title,
+                        UltraClassifyResult* out) {
+    if (out == nullptr) {
+        return -1;
+    }
+    out->matched = 0;
+    out->market_flags = 0;
+    out->ticker_count = 0;
+    out->signal_type[0] = '\0';
+    out->ticker[0] = '\0';
+    out->asset_name[0] = '\0';
+
+    std::uint64_t exchange_key = 0;
+    if (exchange == "upbit") {
+        exchange_key = 1;
+    } else if (exchange == "bithumb") {
+        exchange_key = 2;
+    } else {
+        return 0;
+    }
+
+    std::string_view signal_type;
+    if (!ultra_match_listing(exchange_key, title, signal_type)) {
+        return 0;
+    }
+
+    const TickerScanResult ticker_scan = scan_listing_tickers(title);
+    if (ticker_scan.primary.empty()) {
+        return 0;
+    }
+    ListingTickers tickers;
+    if (ticker_scan.multiple) {
+        tickers = extract_listing_tickers(title);
+    } else {
+        tickers.push_unique(ticker_scan.primary);
+    }
+    if (tickers.count == 0) {
+        return 0;
+    }
+
+    const std::string_view primary_ticker = tickers.values[0];
+    const std::string asset_name = extract_asset_name_for_ticker(title, primary_ticker);
+
+    out->matched = 1;
+    out->market_flags = extract_market_flags(title);
+    copy_to_buffer(signal_type, out->signal_type, sizeof(out->signal_type));
+    copy_to_buffer(primary_ticker, out->ticker, sizeof(out->ticker));
+    copy_to_buffer(asset_name, out->asset_name, sizeof(out->asset_name));
+    out->ticker_count = static_cast<int>(tickers.count);
+    for (std::size_t i = 0; i < tickers.count && i < MAX_ULTRA_TICKERS; ++i) {
+        copy_to_buffer(tickers.values[i], out->tickers[i], sizeof(out->tickers[i]));
+    }
+    return 1;
+}
+
 class ListingUltraEngine {
 public:
     ListingUltraEngine()
@@ -1291,47 +1402,8 @@ public:
             }
         }
 
-        bool matched = false;
         std::string_view signal_type;
-        if (exchange_key == 1) {
-            matched = false;
-            if (title.rfind("[거래]", 0) == 0 &&
-                contains_none(exclude_scan_text(title), UPBIT_EXCLUDE_KEYWORDS,
-                              std::size(UPBIT_EXCLUDE_KEYWORDS)) &&
-                has_ascii_word(title, "KRW")) {
-                constexpr std::string_view new_listing_anchor = "신규 거래지원 안내";
-                if (title.find(new_listing_anchor) != std::string_view::npos) {
-                    const size_t market_end = find_market_parenthetical_end(
-                        title,
-                        title.find(new_listing_anchor)
-                    );
-                    matched = market_end != std::string_view::npos &&
-                              remainder_is_only_parentheticals(title.substr(market_end));
-                } else {
-                    constexpr std::string_view market_add_suffix = "마켓 디지털 자산 추가";
-                    const size_t marker_idx = title.rfind(market_add_suffix);
-                    matched = marker_idx != std::string_view::npos &&
-                              remainder_is_only_parentheticals(
-                                  title.substr(marker_idx + market_add_suffix.size())
-                              );
-                }
-            }
-            signal_type = "new_listing";
-        } else {
-            matched = false;
-            if (has_bithumb_listing_prefix(title) &&
-                contains_none(exclude_scan_text(title), BITHUMB_EXCLUDE_KEYWORDS,
-                              std::size(BITHUMB_EXCLUDE_KEYWORDS)) &&
-                title.find("원화 마켓 재거래지원 안내") == std::string_view::npos) {
-                constexpr std::string_view marker = "원화 마켓 추가";
-                const size_t marker_pos = title.find(marker);
-                matched = marker_pos != std::string_view::npos &&
-                          is_allowed_bithumb_market_add_suffix(
-                              title.substr(marker_pos + marker.size())
-                          );
-            }
-            signal_type = "market_add";
-        }
+        const bool matched = ultra_match_listing(exchange_key, title, signal_type);
 
         if (!matched) {
             return 0;
@@ -1938,4 +2010,15 @@ extern "C" int get_listing_trades(
         return 0;
     }
     return global_engine().get_trade_results(exchange, message_id, out, capacity);
+}
+
+extern "C" int ultra_classify_title(
+    const char* exchange,
+    const char* title,
+    UltraClassifyResult* out
+) {
+    if (exchange == nullptr || title == nullptr || out == nullptr) {
+        return -1;
+    }
+    return ultra_classify_into(exchange, title, out);
 }

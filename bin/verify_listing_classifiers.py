@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import logging
 import subprocess
@@ -14,6 +15,10 @@ from typing import Any
 MODULE_DIR = Path(__file__).resolve().parents[1]
 CASES_PATH = MODULE_DIR / "tests" / "fixtures" / "listing_title_cases.json"
 DEFAULT_RELAY_PATH = MODULE_DIR / "bin" / "tdlib_json_relay"
+DEFAULT_ULTRA_DYLIB = MODULE_DIR / "bin" / "liblisting_ultra_engine.dylib"
+# Must match cpp/listing_ultra_engine.cpp: MAX_ULTRA_TICKERS and the market flag bits.
+MAX_ULTRA_TICKERS = 16
+_MARKET_FLAG_BITS = (("KRW", 1), ("BTC", 2), ("USDT", 4), ("ETH", 8))
 
 sys.path.insert(0, str(MODULE_DIR))
 
@@ -181,13 +186,95 @@ def _verify_tdlib_relay(
     }
 
 
+class _UltraClassifyResult(ctypes.Structure):
+    # Mirrors UltraClassifyResult in cpp/listing_ultra_engine.cpp (field order/types).
+    _fields_ = [
+        ("matched", ctypes.c_int),
+        ("market_flags", ctypes.c_uint32),
+        ("ticker_count", ctypes.c_int),
+        ("signal_type", ctypes.c_char * 16),
+        ("ticker", ctypes.c_char * 16),
+        ("asset_name", ctypes.c_char * 128),
+        ("tickers", (ctypes.c_char * 16) * MAX_ULTRA_TICKERS),
+    ]
+
+
+def _load_ultra_classifier(dylib_path: Path) -> Any:
+    lib = ctypes.CDLL(str(dylib_path))
+    lib.ultra_classify_title.argtypes = [
+        ctypes.c_char_p,
+        ctypes.c_char_p,
+        ctypes.POINTER(_UltraClassifyResult),
+    ]
+    lib.ultra_classify_title.restype = ctypes.c_int
+    return lib
+
+
+def _ultra_actual(lib: Any, *, exchange: str, title: str) -> dict[str, Any] | None:
+    res = _UltraClassifyResult()
+    rc = lib.ultra_classify_title(
+        exchange.encode("utf-8"), title.encode("utf-8"), ctypes.byref(res)
+    )
+    if rc != 1:
+        return None
+    tickers = [
+        bytes(res.tickers[i]).split(b"\x00", 1)[0].decode("utf-8")
+        for i in range(res.ticker_count)
+    ]
+    markets = [name for name, bit in _MARKET_FLAG_BITS if res.market_flags & bit]
+    return {
+        "signal_type": res.signal_type.decode("utf-8"),
+        "ticker": res.ticker.decode("utf-8"),
+        "tickers": tickers,
+        "asset_name": res.asset_name.decode("utf-8"),
+        "markets": markets,
+    }
+
+
+def _verify_ultra_engine(
+    cases: list[dict[str, Any]],
+    *,
+    dylib_path: Path,
+    required: bool,
+) -> dict[str, Any]:
+    if not dylib_path.exists():
+        return {
+            "name": "ultra_engine_fixture",
+            "ok": not required,
+            "skipped": True,
+            "required": required,
+            "reason": f"ultra_dylib_missing:{dylib_path}",
+        }
+
+    lib = _load_ultra_classifier(dylib_path)
+    failures: list[dict[str, Any]] = []
+    for case in cases:
+        actual = _ultra_actual(lib, exchange=case["exchange"], title=case["title"])
+        if _actual_subset(actual) != _expected_subset(case["expected"]):
+            _record_mismatch(
+                failures,
+                classifier="ultra_engine",
+                case=case,
+                actual=actual,
+            )
+    return {
+        "name": "ultra_engine_fixture",
+        "ok": not failures,
+        "required": required,
+        "failures": failures,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixture", type=Path, default=CASES_PATH)
     parser.add_argument("--relay-path", type=Path, default=DEFAULT_RELAY_PATH)
     parser.add_argument("--require-tdlib-relay", action="store_true")
+    parser.add_argument("--ultra-dylib-path", type=Path, default=DEFAULT_ULTRA_DYLIB)
+    parser.add_argument("--require-ultra-engine", action="store_true")
     parser.add_argument("--skip-default", action="store_true")
     parser.add_argument("--skip-tdlib-relay", action="store_true")
+    parser.add_argument("--skip-ultra-engine", action="store_true")
     parser.add_argument("--timeout", type=float, default=5.0)
     args = parser.parse_args()
 
@@ -202,6 +289,14 @@ def main() -> int:
                 relay_path=args.relay_path,
                 timeout=args.timeout,
                 required=args.require_tdlib_relay,
+            )
+        )
+    if not args.skip_ultra_engine:
+        steps.append(
+            _verify_ultra_engine(
+                cases,
+                dylib_path=args.ultra_dylib_path,
+                required=args.require_ultra_engine,
             )
         )
 

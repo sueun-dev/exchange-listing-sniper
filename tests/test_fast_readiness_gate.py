@@ -510,7 +510,8 @@ def test_strict_live_tdlib_enables_required_live_startup_gates(monkeypatch):
     assert module.main() == 0
     assert captured["trading_config_check"]["required"] is True
     assert captured["listing_classifier_fixture_check"]["required"] is True
-    assert captured["listing_classifier_fixture_check"]["cmd"][-1] == "--require-tdlib-relay"
+    assert "--require-tdlib-relay" in captured["listing_classifier_fixture_check"]["cmd"]
+    assert "--require-ultra-engine" in captured["listing_classifier_fixture_check"]["cmd"]
     assert captured["tdlib_symbol_cache_refresh"]["required"] is True
     assert captured["tdlib_symbol_cache_refresh"]["cmd"][-2:] == [
         "bin/tdlib_symbol_cache.py",

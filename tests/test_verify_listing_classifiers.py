@@ -16,6 +16,7 @@ def test_verify_listing_classifiers_passes_current_fixture_and_relay():
             sys.executable,
             str(SCRIPT_PATH),
             "--require-tdlib-relay",
+            "--require-ultra-engine",
         ],
         cwd=str(MODULE_DIR),
         text=True,
@@ -32,6 +33,7 @@ def test_verify_listing_classifiers_passes_current_fixture_and_relay():
         "python_classifier_fixture",
         "default_classifier_fixture",
         "tdlib_relay_cli_fixture",
+        "ultra_engine_fixture",
     ]
 
 
@@ -44,6 +46,7 @@ def test_verify_listing_classifiers_fails_when_required_relay_is_missing(tmp_pat
             "--relay-path",
             str(tmp_path / "missing-relay"),
             "--skip-default",
+            "--skip-ultra-engine",
         ],
         cwd=str(MODULE_DIR),
         text=True,
@@ -57,4 +60,30 @@ def test_verify_listing_classifiers_fails_when_required_relay_is_missing(tmp_pat
     payload = json.loads(completed.stdout[completed.stdout.find("{") :])
     assert payload["ok"] is False
     assert payload["steps"][-1]["name"] == "tdlib_relay_cli_fixture"
+    assert payload["steps"][-1]["required"] is True
+
+
+def test_verify_listing_classifiers_fails_when_required_ultra_engine_is_missing(tmp_path):
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT_PATH),
+            "--require-ultra-engine",
+            "--ultra-dylib-path",
+            str(tmp_path / "missing-ultra.dylib"),
+            "--skip-default",
+            "--skip-tdlib-relay",
+        ],
+        cwd=str(MODULE_DIR),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        timeout=10,
+        check=False,
+    )
+
+    assert completed.returncode == 2, completed.stdout
+    payload = json.loads(completed.stdout[completed.stdout.find("{") :])
+    assert payload["ok"] is False
+    assert payload["steps"][-1]["name"] == "ultra_engine_fixture"
     assert payload["steps"][-1]["required"] is True
