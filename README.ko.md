@@ -162,6 +162,9 @@ WIF, ETHFI, IO, USDE, TAO, …) 위주로, 한국 상장이 더는 못 움직인
 실재하나 선택적이다 — "다 줍줍"이 엣지가 아니라 "맞는 상장을, 빠르게, 그리고 청산"이
 엣지다.**
 
+업비트 데이터셋(`data/upbit_listing_backtest_180d.json`, 로컬/gitignore)이 이 교차검증의
+출처이며, 같은 방식(텔레그램 타임스탬프 + Bybit 공개 kline)으로 재현 가능하다.
+
 ## 기능
 
 - **5개 구현으로 입증된 정확성.** Python, C++ 분류기, Rust 분류기, C++ ultra 엔진, TDLib

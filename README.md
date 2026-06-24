@@ -179,6 +179,9 @@ refinements are to skip coins already listed on the other Korean exchange and to
 established large caps. **The honest takeaway: the strategy is real but selective —
 "snipe everything" is not the edge; "snipe the right listing, fast, and exit" is.**
 
+The Upbit dataset (`data/upbit_listing_backtest_180d.json`, local/gitignored) backs this
+cross-check and is reproducible the same way (Telegram timestamps + Bybit public kline).
+
 ## Features
 
 - **Correctness, proven across 5 implementations.** Python, the C++ classifier, the Rust
