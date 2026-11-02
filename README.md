@@ -301,4 +301,4 @@ self-heal via per-backend auto-reconnect, so transient network drops never stop 
 
 ## License
 
-No license is granted. Provided as-is, for personal/educational reference only.
+[MIT](LICENSE). Provided as-is, with no warranty.

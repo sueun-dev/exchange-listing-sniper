@@ -280,4 +280,4 @@ bash bin/run_race_native_buy_realtime.sh
 
 ## 라이선스
 
-라이선스 미부여. 있는 그대로 제공되며, 개인/교육 참고용.
+[MIT](LICENSE). 있는 그대로 제공되며 어떠한 보증도 하지 않습니다.
