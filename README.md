@@ -37,8 +37,9 @@ parsing the announcement and submitting the order before the crowd. That is an
 *engineering* problem, not a discretionary one — it reduces to (1) receiving the
 Telegram message with minimal latency, (2) deciding "is this an actionable KRW listing?"
 deterministically in microseconds, and (3) firing a correct, idempotent Bybit order,
-all before the candle moves. This repository is that machine: a microsecond-class
-detect-and-buy pipeline built to capture the few seconds of edge around each
+all before the candle moves. This repository is that machine: a low-latency
+detect-and-buy pipeline (local hot path benchmarked in microseconds; end-to-end
+latency is network-bound) built to capture the few seconds of edge around each
 announcement, and validated end-to-end on real historical data.
 
 ## How it works
